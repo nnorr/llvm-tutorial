@@ -1,0 +1,27 @@
+# Build output
+build/
+*.o
+*.a
+*.so
+a.out
+toy
+
+# LLVM/Clang intermediates emitted by the tutorial
+*.ll
+*.bc
+*.s
+output.o
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Editor / OS
+.vscode/
+.idea/
+.cache/
+*.swp
+.DS_Store
