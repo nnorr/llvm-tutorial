@@ -6,6 +6,10 @@ build/
 a.out
 toy
 
+# build.sh names the binary after the source stem, so ch3.cpp -> ch3
+ch[0-9]
+toy[0-9]
+
 # LLVM/Clang intermediates emitted by the tutorial
 *.ll
 *.bc
