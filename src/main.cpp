@@ -96,6 +96,16 @@ int runInteractive() {
           fprintf(stderr, "Read function definition:");
           FnIR->print(errs());
           fprintf(stderr, "\n");
+
+          // Hand the definition to the JIT right away, in its own module and
+          // with NO ResourceTracker so it persists. If it were left in the
+          // working module it would be swept away with the next top-level
+          // expression, whose module *is* tracked and removed after
+          // evaluation -- and later calls would fail to resolve the symbol.
+          auto TSM = orc::ThreadSafeModule(CG.takeModule(), CG.takeContext());
+          ExitOnErr(TheJIT->addModule(std::move(TSM)));
+          CG.initModule("KaleidoscopeJIT", TheJIT->getDataLayout(),
+                        /*Optimize=*/true);
         }
       } else {
         P.advance(); // error recovery

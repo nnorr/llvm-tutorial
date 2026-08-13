@@ -75,10 +75,23 @@ stdin/file → Lexer → Parser → AST → CodeGen ──→ Module ──→ K
 
 The two modes differ in exactly three ways:
 
-1. **Module lifetime.** JIT mode calls `CodeGen::initModule()` before *every*
-   top-level expression, hands the finished module to the JIT, and reopens a
-   fresh one. Compile mode calls it once and accumulates. This is why `CodeGen`
-   is deliberately **not** a construct-once object.
+1. **Module lifetime.** JIT mode hands off a module and reopens a fresh one
+   after *every* definition and *every* top-level expression. Compile mode calls
+   `initModule()` once and accumulates everything. This is why `CodeGen` is
+   deliberately **not** a construct-once object.
+
+   The two handoffs differ, and the difference matters:
+
+   | | ResourceTracker? | Lifetime |
+   | --- | --- | --- |
+   | `def` | no | permanent — later expressions call into it |
+   | top-level expr | yes | removed right after evaluation |
+
+   A definition must get its own module *immediately*. Left in the working
+   module, it would be handed to the JIT as part of the next top-level
+   expression's tracked module and then freed with it — and the following call
+   would fail with `Symbols not found`. `FunctionProtos` would still re-emit a
+   declaration, so this surfaces at JIT lookup, not at codegen.
 2. **Top-level wrapper name.** `__anon_expr` for JIT (looked up and called),
    `main` for compile (a real entry point). Hence
    `Parser::parseTopLevelExpr(name)`.
