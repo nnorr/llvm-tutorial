@@ -5,7 +5,7 @@ A modular reimplementation of the [LLVM Kaleidoscope tutorial](https://llvm.org/
 The tutorial ships each chapter as a single `toy.cpp` in which every piece of
 state is a file-scope global. That works for a linear read-through but hides how
 the components actually relate. This version splits them into modules with
-explicit interfaces, which surfaces three couplings the globals concealed —
+explicit interfaces, which surfaces the couplings the globals concealed —
 documented under [Cross-cutting decisions](#cross-cutting-decisions).
 
 It is also a **union of the tutorial's chapters**, which no single chapter is:
@@ -262,7 +262,7 @@ serve stdin (JIT) and a file (compile), and makes it testable from a
 
 ## Deviations from the tutorial
 
-Beyond the structural changes above, six behavioral ones — all deliberate:
+Beyond the structural changes above, seven behavioral ones — all deliberate:
 
 1. **Fixed a use-after-move.** Ch9 line 1310 dereferences `Proto` after moving it
    into `FunctionProtos` at line 1235 — a null `unique_ptr` deref on the error
@@ -345,9 +345,17 @@ the loop semantics described above.
 | 4 — JIT + optimizer | `CodeGen::initModule` (pass pipeline), `runInteractive()` in `main.cpp` |
 | 5 — Control flow | `visit(IfExprAST&)`, `visit(ForExprAST&)` |
 | 6 — User-defined operators | `visit(UnaryExprAST&)`, `OperatorTable`, `Parser::parsePrototype` |
-| 7 — Mutable variables | `visit(VarExprAST&)`, `CodeGen::createEntryBlockAlloca`, `PromotePass` |
+| 7 — Mutable variables | `visit(VarExprAST&)`, `AssignExprAST`, `CodeGen::createEntryBlockAlloca`, `PromotePass` |
 | 8 — Object code | `ObjectEmitter.{h,cpp}`, `runCompile()` |
 | 9 — Debug info | `DebugInfo.{h,cpp}`, `SourceLocation.h`, `-g` path |
+| 9 — per-node `dump()` | `ASTDumper.{h,cpp}` — reworked into a visitor, behind `--dump-ast` |
+
+Two pieces correspond to no chapter, added on top:
+
+| Addition | Lands in |
+| -------- | -------- |
+| LLVM-style RTTI (`Kind` + `classof`) | `AST.h`; used by `Parser::parseBinOpRHS` |
+| Tests | `tests/LexerTests.cpp`, `tests/RunJit.cmake`, `enable_testing()` in `CMakeLists.txt` |
 
 ---
 
