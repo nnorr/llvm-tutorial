@@ -29,8 +29,8 @@ separable, which is the clearest argument for the split.
                     SourceLocation.h
                      ╱            ╲
                 Lexer.h          AST.h ←── ASTVisitor.h
-                    ╲            ╱   ╲
-                     ╲          ╱     ╲
+                    ╲            ╱   ╲ ╲
+                     ╲          ╱     ╲ ╰──→ ASTDumper.h
                       Parser.h         CodeGen.h ──→ DebugInfo.h
                           ╲               ╱  ╲
                            ╲             ╱    ╲
@@ -41,21 +41,26 @@ separable, which is the clearest argument for the split.
                                        main.cpp ──┘
 ```
 
-Nothing points upward. `AST.h` is the bottom of the graph and has **zero LLVM
-includes**.
+Nothing points upward. `AST.h` is the bottom of the graph and carries **no LLVM
+IR dependency** — no `Value*`, no `IRBuilder`, no `codegen()`. Its one LLVM
+include is `llvm/Support/Casting.h`, a header-only utility providing
+`isa<>`/`dyn_cast<>`/`cast<>` on top of the hand-rolled `Kind` discriminator
+(see [LLVM-style RTTI](#llvm-style-rtti)). `ASTDumper` demonstrates the point:
+a full consumer of the AST that includes no LLVM headers whatsoever.
 
 | File                     | Lines | Responsibility |
 | ------------------------ | ----: | -------------- |
-| `include/SourceLocation.h` |   16 | `{Line, Col}` pair; produced by Lexer, carried by AST, consumed by DebugInfo |
-| `include/Lexer.h` + `src/Lexer.cpp` | 200 | Character stream → tokens, with location tracking |
-| `include/ASTVisitor.h`   |    44 | Double-dispatch interface over the 8 expression nodes |
-| `include/AST.h`          |   223 | Node classes. Pure data + `accept()` |
-| `include/OperatorTable.h`|    46 | Binary operator precedence, shared by Parser and CodeGen |
-| `include/Parser.h` + `src/Parser.cpp` | 473 | Recursive descent + precedence climbing; the only thing that builds AST nodes |
-| `include/CodeGen.h` + `src/CodeGen.cpp` | 627 | AST → LLVM IR, as an `ASTVisitor`. Owns the pass pipeline |
+| `include/SourceLocation.h` | 16 | `{Line, Col}` pair; produced by Lexer, carried by AST, consumed by DebugInfo |
+| `include/Lexer.h` + `src/Lexer.cpp` | 216 | Character stream → tokens, with location tracking |
+| `include/ASTVisitor.h`   | 46 | Double-dispatch interface over the 9 expression nodes |
+| `include/AST.h`          | 296 | Node classes. Pure data + `accept()` |
+| `include/OperatorTable.h`| 46 | Binary operator precedence, shared by Parser and CodeGen |
+| `include/Parser.h` + `src/Parser.cpp` | 490 | Recursive descent + precedence climbing; the only thing that builds AST nodes |
+| `include/ASTDumper.h` + `src/ASTDumper.cpp` | 170 | Second visitor: prints the AST as a tree. No LLVM dependency |
+| `include/CodeGen.h` + `src/CodeGen.cpp` | 623 | AST → LLVM IR, as an `ASTVisitor`. Owns the pass pipeline |
 | `include/DebugInfo.h` + `src/DebugInfo.cpp` | 127 | DWARF metadata emission; wraps `DIBuilder` |
 | `include/ObjectEmitter.h` + `src/ObjectEmitter.cpp` | 101 | Module → native `.o` via `TargetMachine` |
-| `src/main.cpp`           |   294 | Argument parsing and the two drivers |
+| `src/main.cpp`           | 321 | Argument parsing and the two drivers |
 | `include/KaleidoscopeJIT.h` | 105 | **Vendored** from upstream, unmodified |
 
 ---
@@ -171,6 +176,47 @@ nested `codegenExpr()` call is the one way to break this design.
 the visitor. `CodeGen` handles them through overloads:
 `codegen(PrototypeAST&)` and `codegen(FunctionAST&)`.
 
+### Two visitors, two shapes
+
+`ASTDumper` is the second consumer, and it exists as much to justify the pattern
+as to be useful. Compare:
+
+| | produces | needs `Result`? | LLVM headers |
+| --- | --- | --- | --- |
+| `CodeGen` | `llvm::Value*` | yes | IR, passes |
+| `ASTDumper` | output on an `ostream` | no — plain `void` | none |
+
+In the tutorial, `dump()` was a virtual method on every node sitting directly
+beside `codegen()`, so the AST carried both concerns at once. Here it carries
+neither, and adding a third consumer (a type checker, a constant folder) means
+writing one new class and touching no existing node.
+
+## LLVM-style RTTI
+
+Every node carries an `ExprASTKind` tag and a matching `classof()`:
+
+```cpp
+class ExprAST {
+public:
+  enum ExprASTKind { Expr_Number, Expr_Variable, ..., Expr_Assign, ... };
+  ExprASTKind getKind() const { return Kind; }
+};
+
+class VariableExprAST : public ExprAST {
+public:
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Variable; }
+};
+```
+
+That is all `isa<>`, `dyn_cast<>` and `cast<>` need. LLVM uses this rather than
+C++ RTTI because it is normally built `-fno-rtti`, so `dynamic_cast` is
+unavailable — and because a tag comparison is far cheaper than a `dynamic_cast`
+walk. It is also the same shape MLIR's Toy AST uses, so it transfers directly.
+
+The visitor means this is rarely needed — dispatch already happens through
+`accept()`. It is used in exactly one place, `Parser::parseBinOpRHS`, to check
+that the destination of `=` is an identifier.
+
 ---
 
 ## Cross-cutting decisions
@@ -221,10 +267,21 @@ Beyond the structural changes above, six behavioral ones — all deliberate:
 1. **Fixed a use-after-move.** Ch9 line 1310 dereferences `Proto` after moving it
    into `FunctionProtos` at line 1235 — a null `unique_ptr` deref on the error
    path. It uses the saved reference `P` everywhere else; now that line does too.
-2. **`dynamic_cast` for the `=` LHS check.** The tutorial `static_cast`s and then
-   null-checks, which is dead code — `static_cast` never yields null. Conda's
-   `llvm-config` does not pass `-fno-rtti`, so the real check works. If you ever
-   build against an LLVM configured without RTTI, this is the one line to revisit.
+2. **The `=` destination check moved to the parser.** The tutorial routes
+   assignment through `BinaryExprAST` and, in codegen, `static_cast`s the LHS to
+   `VariableExprAST` and null-checks it — dead code, since `static_cast` never
+   yields null.
+
+   But "the destination of `=` must be an identifier" is a *syntactic* rule, so
+   the parser enforces it and emits a dedicated `AssignExprAST` holding the name
+   as a `std::string`. Codegen then has no cast and no failure path at all: an
+   assignment to a non-variable is **unrepresentable**, not merely rejected
+   later. The check itself uses `dyn_cast` (LLVM RTTI, not C++), so nothing here
+   depends on how LLVM was configured.
+
+   ```
+   2 = 3;   →  Error: destination of '=' must be a variable   (at parse time)
+   ```
 3. **Native target init, not `InitializeAll*`.** We only emit for the host, so
    this links the `native` component instead of every backend.
 4. **Source locations captured at the keyword.** The tutorial let `for`/`var`/unary
@@ -237,6 +294,44 @@ Beyond the structural changes above, six behavioral ones — all deliberate:
    (`putchard`, `printd`) against the running process, so the executable's own
    symbols must be in the dynamic symbol table. Without it, `extern putchard(x);`
    links but fails to resolve at runtime.
+7. **Malformed number literals are rejected.** The tutorial lexes `[0-9.]+` and
+   hands it to `strtod` ignoring where parsing stopped, so `1.23.45.67` silently
+   becomes `1.23` — everything from the second `.` is swallowed and lost without
+   a word. Checking `strtod`'s end pointer makes it loud:
+
+   ```
+   1.23.45.67;   →  Error: invalid number literal '1.23.45.67' at 1:1
+   ```
+
+   The whole run stays one token rather than being re-split at the second `.`, so
+   a typo yields one diagnostic here instead of a cascade of parse errors.
+
+---
+
+## Testing
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+| Test | What it covers |
+| --- | --- |
+| `lexer` | 5 unit tests, 84 checks — keywords vs identifiers, number literals incl. the malformed case, operators as raw ASCII, comments/EOF, line-column tracking |
+| `jit_fib` | `tests/fib.ks` end to end → 89 |
+| `jit_operators` | `tests/operators.ks` — user-defined unary/binary operators with custom precedence, nested if/else, `for` with explicit step → 30 |
+
+`lexer_tests` links only `src/Lexer.cpp` and **no LLVM libraries at all** — the
+Lexer depends on nothing but `SourceLocation.h`. It uses a few macros rather
+than a test framework, keeping the build dependency-free.
+
+Being able to unit-test the lexer at all is the payoff from having it take an
+`std::istream&`: tests drive it from a `std::istringstream` with no process
+involved. The tutorial's `getchar()`-based lexer can only be exercised by piping
+text through the whole program and reading the output by eye.
+
+`sumstep(10)` in `operators.ks` is expected to be **30, not 20** — the do-while
+`for` runs one extra iteration. That makes it an accidental regression test for
+the loop semantics described above.
 
 ---
 
@@ -302,6 +397,7 @@ later to win.
 ./build/toy                              # REPL + JIT
 ./build/toy -c tests/fib.ks              # -> output.o
 ./build/toy -c tests/fib.ks -g -o fib.o  # with DWARF
+./build/toy --dump-ast < tests/fib.ks    # print the parse tree
 ```
 
 `build.sh` remains for compiling the single-file reference chapters:

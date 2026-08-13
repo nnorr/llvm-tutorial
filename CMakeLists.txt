@@ -36,6 +36,7 @@ add_executable(toy
   src/main.cpp
   src/Lexer.cpp
   src/Parser.cpp
+  src/ASTDumper.cpp
   src/CodeGen.cpp
   src/DebugInfo.cpp
   src/ObjectEmitter.cpp
@@ -53,3 +54,33 @@ target_link_libraries(toy PRIVATE ${LLVM_LIBS})
 # process, so this executable's own symbols must be in the dynamic symbol
 # table. Without this, `extern putchard(x);` links but fails to resolve.
 set_target_properties(toy PROPERTIES ENABLE_EXPORTS ON)
+
+#===----------------------------------------------------------------------===#
+# Tests
+#===----------------------------------------------------------------------===#
+
+enable_testing()
+
+# The Lexer depends on nothing but SourceLocation.h, so its tests need no LLVM
+# libraries at all -- they link just the one translation unit.
+add_executable(lexer_tests tests/LexerTests.cpp src/Lexer.cpp)
+target_include_directories(lexer_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME lexer COMMAND lexer_tests)
+
+# End-to-end: JIT the sample programs and check the evaluated results.
+add_test(NAME jit_fib
+  COMMAND ${CMAKE_COMMAND}
+    -DTOY=$<TARGET_FILE:toy>
+    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/fib.ks
+    -DEXPECT=89
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/RunJit.cmake
+)
+add_test(NAME jit_operators
+  COMMAND ${CMAKE_COMMAND}
+    -DTOY=$<TARGET_FILE:toy>
+    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/tests/operators.ks
+    -DEXPECT=30
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/RunJit.cmake
+)

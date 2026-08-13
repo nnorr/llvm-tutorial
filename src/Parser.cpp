@@ -288,8 +288,25 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int ExprPrec,
     }
 
     // Merge LHS/RHS.
-    LHS = std::make_unique<BinaryExprAST>(BinLoc, static_cast<char>(BinOp),
-                                          std::move(LHS), std::move(RHS));
+    if (BinOp == '=') {
+      // "the destination of '=' must be an identifier" is a syntactic rule, so
+      // enforce it here rather than in codegen. Using LLVM-style RTTI
+      // (Kind + classof) rather than C++ dynamic_cast, since LLVM is normally
+      // built -fno-rtti and the AST already carries the discriminator.
+      //
+      // Doing this in the parser means AssignExprAST can store the name
+      // directly, so codegen has no cast and no failure path at all -- an
+      // assignment to a non-variable is unrepresentable, not merely rejected.
+      auto *LHSVar = llvm::dyn_cast<VariableExprAST>(LHS.get());
+      if (!LHSVar)
+        return logError("destination of '=' must be a variable");
+
+      LHS = std::make_unique<AssignExprAST>(BinLoc, LHSVar->getName(),
+                                            std::move(RHS));
+    } else {
+      LHS = std::make_unique<BinaryExprAST>(BinLoc, static_cast<char>(BinOp),
+                                            std::move(LHS), std::move(RHS));
+    }
   }
 }
 

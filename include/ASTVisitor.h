@@ -7,6 +7,7 @@ class NumberExprAST;
 class VariableExprAST;
 class UnaryExprAST;
 class BinaryExprAST;
+class AssignExprAST;
 class CallExprAST;
 class IfExprAST;
 class ForExprAST;
@@ -33,6 +34,7 @@ public:
   virtual void visit(VariableExprAST &E) = 0;
   virtual void visit(UnaryExprAST &E) = 0;
   virtual void visit(BinaryExprAST &E) = 0;
+  virtual void visit(AssignExprAST &E) = 0;
   virtual void visit(CallExprAST &E) = 0;
   virtual void visit(IfExprAST &E) = 0;
   virtual void visit(ForExprAST &E) = 0;

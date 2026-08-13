@@ -1,3 +1,4 @@
+#include "ASTDumper.h"
 #include "CodeGen.h"
 #include "DebugInfo.h"
 #include "KaleidoscopeJIT.h"
@@ -49,6 +50,7 @@ namespace {
 struct Options {
   bool Compile = false;      // -c: compile a file instead of running the REPL
   bool Debug = false;        // -g: emit DWARF debug info (implies -c)
+  bool DumpAST = false;      // --dump-ast: print the parse tree
   std::string Input;         // source file for -c
   std::string Output = "output.o";
 };
@@ -58,14 +60,15 @@ void usage(const char *Prog) {
          << "  no arguments   read stdin, JIT and evaluate interactively\n"
          << "  -c <file.ks>   compile to a native object file\n"
          << "  -g             emit debug info (disables optimization)\n"
-         << "  -o <file.o>    output object name (default output.o)\n";
+         << "  -o <file.o>    output object name (default output.o)\n"
+         << "  --dump-ast     print the AST for each construct\n";
 }
 
 //===----------------------------------------------------------------------===//
 // Interactive JIT driver (Chapters 4-7)
 //===----------------------------------------------------------------------===//
 
-int runInteractive() {
+int runInteractive(const Options &O) {
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
@@ -76,6 +79,7 @@ int runInteractive() {
   OperatorTable Ops;
   Lexer Lex(std::cin);
   CodeGen CG(Ops);
+  ASTDumper Dumper(std::cout);
   CG.initModule("KaleidoscopeJIT", TheJIT->getDataLayout(), /*Optimize=*/true);
 
   fprintf(stderr, "ready> ");
@@ -92,6 +96,8 @@ int runInteractive() {
 
     case tok_def:
       if (auto FnAST = P.parseDefinition()) {
+        if (O.DumpAST)
+          Dumper.dump(*FnAST);
         if (Function *FnIR = CG.codegen(*FnAST)) {
           fprintf(stderr, "Read function definition:");
           FnIR->print(errs());
@@ -115,6 +121,8 @@ int runInteractive() {
 
     case tok_extern:
       if (auto ProtoAST = P.parseExtern()) {
+        if (O.DumpAST)
+          Dumper.dump(*ProtoAST);
         if (Function *FnIR = CG.codegen(*ProtoAST)) {
           fprintf(stderr, "Read extern: ");
           FnIR->print(errs());
@@ -129,6 +137,8 @@ int runInteractive() {
 
     default:
       if (auto FnAST = P.parseTopLevelExpr()) {
+        if (O.DumpAST)
+          Dumper.dump(*FnAST);
         if (CG.codegen(*FnAST)) {
           // Track the JIT'd memory for this anonymous expression so it can be
           // freed once evaluated.
@@ -199,6 +209,7 @@ int runCompile(const Options &O) {
   }
 
   Parser P(Lex, Ops);
+  ASTDumper Dumper(std::cout);
   bool SawTopLevel = false;
   bool Failed = false;
 
@@ -214,6 +225,8 @@ int runCompile(const Options &O) {
 
     if (Tok == tok_def) {
       auto FnAST = P.parseDefinition();
+      if (FnAST && O.DumpAST)
+        Dumper.dump(*FnAST);
       if (!FnAST || !CG.codegen(*FnAST)) {
         errs() << "error reading function definition\n";
         Failed = true;
@@ -245,6 +258,8 @@ int runCompile(const Options &O) {
       break;
     }
     auto FnAST = P.parseTopLevelExpr("main");
+    if (FnAST && O.DumpAST)
+      Dumper.dump(*FnAST);
     if (!FnAST || !CG.codegen(*FnAST)) {
       errs() << "error generating code for top level expr\n";
       Failed = true;
@@ -282,6 +297,8 @@ int main(int argc, char **argv) {
       O.Input = argv[++I];
     } else if (Arg == "-o" && I + 1 < argc) {
       O.Output = argv[++I];
+    } else if (Arg == "--dump-ast") {
+      O.DumpAST = true;
     } else if (Arg == "-g") {
       O.Debug = true;
     } else if (Arg == "-h" || Arg == "--help") {
@@ -300,5 +317,5 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  return O.Compile ? runCompile(O) : runInteractive();
+  return O.Compile ? runCompile(O) : runInteractive(O);
 }

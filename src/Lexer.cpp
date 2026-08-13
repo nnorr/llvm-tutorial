@@ -86,15 +86,31 @@ int Lexer::gettok() {
   }
 
   if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9.]+
-    // NOTE: as in the tutorial, this does no validation -- "1.23.45.67" lexes
-    // as one number token and strtod silently stops at the second '.'.
     std::string NumStr;
     do {
       NumStr += static_cast<char>(LastChar);
       LastChar = advance();
     } while (isdigit(LastChar) || LastChar == '.');
 
-    NumVal = strtod(NumStr.c_str(), nullptr);
+    // The tutorial passes NumStr to strtod and ignores where it stopped, so
+    // "1.23.45.67" silently becomes 1.23 -- everything from the second '.'
+    // onward is swallowed by the token and lost without a word. Checking the
+    // end pointer makes that loud instead of silent: strtod parses the longest
+    // valid prefix, so if it did not land on the terminating NUL, the rest of
+    // the run is junk.
+    //
+    // The whole [0-9.]+ run stays a single token rather than being re-split at
+    // the second '.', so a typo produces one diagnostic here instead of a
+    // confusing cascade of parse errors downstream.
+    const char *Start = NumStr.c_str();
+    char *End = nullptr;
+    NumVal = strtod(Start, &End);
+
+    if (End != Start + NumStr.size() || End == Start) {
+      fprintf(stderr, "Error: invalid number literal '%s' at %d:%d\n",
+              NumStr.c_str(), CurLoc.Line, CurLoc.Col);
+      NumVal = 0.0;
+    }
     return tok_number;
   }
 

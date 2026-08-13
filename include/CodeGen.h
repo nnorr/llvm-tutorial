@@ -72,6 +72,7 @@ class CodeGen : public ASTVisitor {
   void visit(VariableExprAST &E) override;
   void visit(UnaryExprAST &E) override;
   void visit(BinaryExprAST &E) override;
+  void visit(AssignExprAST &E) override;
   void visit(CallExprAST &E) override;
   void visit(IfExprAST &E) override;
   void visit(ForExprAST &E) override;

@@ -134,37 +134,32 @@ void CodeGen::visit(UnaryExprAST &E) {
   Result = Builder->CreateCall(F, OperandV, "unop");
 }
 
-void CodeGen::visit(BinaryExprAST &E) {
+/// Assignment is its own node, built by the parser only after it has confirmed
+/// the destination is an identifier -- so there is no cast and no error path
+/// here, unlike the tutorial's '=' special case inside BinaryExprAST::codegen.
+void CodeGen::visit(AssignExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  // Special case '=' because we don't want to emit the LHS as an expression.
-  if (E.getOp() == '=') {
-    // The tutorial uses static_cast here (LLVM is usually built -fno-rtti) and
-    // then null-checks the result, which is dead code -- static_cast never
-    // yields null. dynamic_cast actually performs the check.
-    auto *LHSE = dynamic_cast<VariableExprAST *>(&E.getLHS());
-    if (!LHSE) {
-      Result = logErrorV("destination of '=' must be a variable");
-      return;
-    }
-
-    Value *Val = codegenExpr(E.getRHS());
-    if (!Val) {
-      Result = nullptr;
-      return;
-    }
-
-    Value *Variable = NamedValues[LHSE->getName()];
-    if (!Variable) {
-      Result = logErrorV("Unknown variable name");
-      return;
-    }
-
-    Builder->CreateStore(Val, Variable);
-    Result = Val;
+  Value *Val = codegenExpr(E.getValue());
+  if (!Val) {
+    Result = nullptr;
     return;
   }
+
+  AllocaInst *Variable = NamedValues[E.getName()];
+  if (!Variable) {
+    Result = logErrorV("Unknown variable name");
+    return;
+  }
+
+  Builder->CreateStore(Val, Variable);
+  Result = Val;
+}
+
+void CodeGen::visit(BinaryExprAST &E) {
+  if (Dbg)
+    Dbg->emitLocation(&E);
 
   Value *L = codegenExpr(E.getLHS());
   Value *R = codegenExpr(E.getRHS());

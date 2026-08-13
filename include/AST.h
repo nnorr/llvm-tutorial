@@ -4,15 +4,20 @@
 #include "ASTVisitor.h"
 #include "SourceLocation.h"
 
+#include "llvm/Support/Casting.h"
+
 #include <cassert>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-/// The AST is deliberately free of any LLVM dependency -- no llvm/IR headers,
-/// no Value*, no codegen(). It is the bottom of the dependency graph: Lexer and
-/// AST depend on nothing, Parser depends on both, CodeGen depends on AST.
+/// The AST carries no LLVM *IR* dependency -- no Value*, no IRBuilder, no
+/// codegen(). Its one LLVM include is llvm/Support/Casting.h, a header-only
+/// utility that provides isa<>/dyn_cast<>/cast<> on top of the hand-rolled
+/// Kind discriminator below. This is the idiomatic LLVM alternative to C++
+/// RTTI (LLVM is normally built -fno-rtti), and it is the same shape MLIR's
+/// own Toy tutorial uses for its AST.
 ///
 /// Unlike the tutorial, these classes are NOT in an anonymous namespace. There
 /// they were confined to one translation unit; in a header an anonymous
@@ -22,14 +27,32 @@ namespace kaleidoscope {
 
 /// ExprAST - Base class for all expression nodes.
 class ExprAST {
+public:
+  /// Discriminator for LLVM-style RTTI. Every concrete subclass gets a tag and
+  /// a matching classof(), which is all isa<>/dyn_cast<> need.
+  enum ExprASTKind {
+    Expr_Number,
+    Expr_Variable,
+    Expr_Unary,
+    Expr_Binary,
+    Expr_Assign,
+    Expr_Call,
+    Expr_If,
+    Expr_For,
+    Expr_Var,
+  };
+
+private:
+  const ExprASTKind Kind;
   SourceLocation Loc;
 
 public:
-  /// The tutorial defaults this parameter to the lexer's CurLoc global, which
-  /// makes the AST depend upward on the Lexer. Here the parser must pass the
-  /// location explicitly.
-  explicit ExprAST(SourceLocation Loc) : Loc(Loc) {}
+  /// The tutorial defaults the location to the lexer's CurLoc global, which
+  /// makes the AST depend upward on the Lexer. Here the parser must pass it.
+  ExprAST(ExprASTKind Kind, SourceLocation Loc) : Kind(Kind), Loc(Loc) {}
   virtual ~ExprAST() = default;
+
+  ExprASTKind getKind() const { return Kind; }
 
   virtual void accept(ASTVisitor &V) = 0;
 
@@ -42,10 +65,13 @@ class NumberExprAST : public ExprAST {
   double Val;
 
 public:
-  NumberExprAST(SourceLocation Loc, double Val) : ExprAST(Loc), Val(Val) {}
+  NumberExprAST(SourceLocation Loc, double Val)
+      : ExprAST(Expr_Number, Loc), Val(Val) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   double getVal() const { return Val; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Number; }
 };
 
 /// VariableExprAST - Expression class for referencing a variable, like "a".
@@ -54,10 +80,14 @@ class VariableExprAST : public ExprAST {
 
 public:
   VariableExprAST(SourceLocation Loc, std::string Name)
-      : ExprAST(Loc), Name(std::move(Name)) {}
+      : ExprAST(Expr_Variable, Loc), Name(std::move(Name)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   const std::string &getName() const { return Name; }
+
+  static bool classof(const ExprAST *E) {
+    return E->getKind() == Expr_Variable;
+  }
 };
 
 /// UnaryExprAST - Expression class for a unary operator.
@@ -68,14 +98,18 @@ class UnaryExprAST : public ExprAST {
 public:
   UnaryExprAST(SourceLocation Loc, char Opcode,
                std::unique_ptr<ExprAST> Operand)
-      : ExprAST(Loc), Opcode(Opcode), Operand(std::move(Operand)) {}
+      : ExprAST(Expr_Unary, Loc), Opcode(Opcode), Operand(std::move(Operand)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   char getOpcode() const { return Opcode; }
   ExprAST &getOperand() const { return *Operand; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Unary; }
 };
 
 /// BinaryExprAST - Expression class for a binary operator.
+///
+/// Assignment is NOT represented here -- see AssignExprAST.
 class BinaryExprAST : public ExprAST {
   char Op;
   std::unique_ptr<ExprAST> LHS, RHS;
@@ -83,12 +117,40 @@ class BinaryExprAST : public ExprAST {
 public:
   BinaryExprAST(SourceLocation Loc, char Op, std::unique_ptr<ExprAST> LHS,
                 std::unique_ptr<ExprAST> RHS)
-      : ExprAST(Loc), Op(Op), LHS(std::move(LHS)), RHS(std::move(RHS)) {}
+      : ExprAST(Expr_Binary, Loc), Op(Op), LHS(std::move(LHS)),
+        RHS(std::move(RHS)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   char getOp() const { return Op; }
   ExprAST &getLHS() const { return *LHS; }
   ExprAST &getRHS() const { return *RHS; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Binary; }
+};
+
+/// AssignExprAST - Expression class for 'name = expr'.
+///
+/// The tutorial routes assignment through BinaryExprAST and then, in codegen,
+/// casts the LHS to VariableExprAST to recover the name. But "the LHS of '='
+/// must be an identifier" is a *syntactic* rule, so the parser can enforce it
+/// and store the name directly. Codegen then needs no cast and no failure
+/// path, and the invalid state (an assignment whose LHS is not a variable) is
+/// unrepresentable rather than merely rejected later.
+class AssignExprAST : public ExprAST {
+  std::string Name;
+  std::unique_ptr<ExprAST> Value;
+
+public:
+  AssignExprAST(SourceLocation Loc, std::string Name,
+                std::unique_ptr<ExprAST> Value)
+      : ExprAST(Expr_Assign, Loc), Name(std::move(Name)),
+        Value(std::move(Value)) {}
+  void accept(ASTVisitor &V) override { V.visit(*this); }
+
+  const std::string &getName() const { return Name; }
+  ExprAST &getValue() const { return *Value; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Assign; }
 };
 
 /// CallExprAST - Expression class for function calls.
@@ -99,11 +161,14 @@ class CallExprAST : public ExprAST {
 public:
   CallExprAST(SourceLocation Loc, std::string Callee,
               std::vector<std::unique_ptr<ExprAST>> Args)
-      : ExprAST(Loc), Callee(std::move(Callee)), Args(std::move(Args)) {}
+      : ExprAST(Expr_Call, Loc), Callee(std::move(Callee)),
+        Args(std::move(Args)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   const std::string &getCallee() const { return Callee; }
   const std::vector<std::unique_ptr<ExprAST>> &getArgs() const { return Args; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Call; }
 };
 
 /// IfExprAST - Expression class for if/then/else.
@@ -113,13 +178,15 @@ class IfExprAST : public ExprAST {
 public:
   IfExprAST(SourceLocation Loc, std::unique_ptr<ExprAST> Cond,
             std::unique_ptr<ExprAST> Then, std::unique_ptr<ExprAST> Else)
-      : ExprAST(Loc), Cond(std::move(Cond)), Then(std::move(Then)),
+      : ExprAST(Expr_If, Loc), Cond(std::move(Cond)), Then(std::move(Then)),
         Else(std::move(Else)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   ExprAST &getCond() const { return *Cond; }
   ExprAST &getThen() const { return *Then; }
   ExprAST &getElse() const { return *Else; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_If; }
 };
 
 /// ForExprAST - Expression class for for/in.
@@ -131,8 +198,9 @@ public:
   ForExprAST(SourceLocation Loc, std::string VarName,
              std::unique_ptr<ExprAST> Start, std::unique_ptr<ExprAST> End,
              std::unique_ptr<ExprAST> Step, std::unique_ptr<ExprAST> Body)
-      : ExprAST(Loc), VarName(std::move(VarName)), Start(std::move(Start)),
-        End(std::move(End)), Step(std::move(Step)), Body(std::move(Body)) {}
+      : ExprAST(Expr_For, Loc), VarName(std::move(VarName)),
+        Start(std::move(Start)), End(std::move(End)), Step(std::move(Step)),
+        Body(std::move(Body)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   const std::string &getVarName() const { return VarName; }
@@ -141,6 +209,8 @@ public:
   /// The step is optional; null means 1.0.
   ExprAST *getStep() const { return Step.get(); }
   ExprAST &getBody() const { return *Body; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_For; }
 };
 
 /// VarExprAST - Expression class for var/in
@@ -153,7 +223,8 @@ public:
       SourceLocation Loc,
       std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> VarNames,
       std::unique_ptr<ExprAST> Body)
-      : ExprAST(Loc), VarNames(std::move(VarNames)), Body(std::move(Body)) {}
+      : ExprAST(Expr_Var, Loc), VarNames(std::move(VarNames)),
+        Body(std::move(Body)) {}
   void accept(ASTVisitor &V) override { V.visit(*this); }
 
   /// Each entry is (name, initializer); the initializer may be null, meaning
@@ -163,6 +234,8 @@ public:
     return VarNames;
   }
   ExprAST &getBody() const { return *Body; }
+
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Var; }
 };
 
 /// PrototypeAST - This class represents the "prototype" for a function,
