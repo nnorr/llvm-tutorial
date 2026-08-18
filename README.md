@@ -67,6 +67,10 @@ when something here misbehaves you can diff against the chapter that covers it.
 
 ## Where to look
 
+**[docs/](docs/README.md)** — 컴포넌트별 코드 설명 (한국어). Walks through each
+module line by line, assuming no C++ background. Start here to understand *how
+the code works*.
+
 **[ARCHITECTURE.md](ARCHITECTURE.md)** covers the design: the module dependency
 graph, why the visitor pattern removes the globals, the couplings that only
 became visible once the file was split, every deliberate deviation from the

@@ -8,6 +8,9 @@ the components actually relate. This version splits them into modules with
 explicit interfaces, which surfaces the couplings the globals concealed —
 documented under [Cross-cutting decisions](#cross-cutting-decisions).
 
+For a line-by-line walkthrough of each module aimed at readers without a C++
+background, see [`docs/`](docs/README.md) (Korean).
+
 It is also a **union of the tutorial's chapters**, which no single chapter is:
 
 |                     | Ch4 | Ch5–7 | Ch8 | Ch9 | here |
