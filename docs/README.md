@@ -23,6 +23,11 @@ C++에 익숙하지 않은 독자를 기준으로 썼습니다. 새로 나오는
 | [04. CodeGen](04-codegen.md) | `CodeGen.{h,cpp}` | Ch3, Ch4, Ch5, Ch6, Ch7 |
 | [05. DebugInfo](05-debuginfo.md) | `DebugInfo.{h,cpp}` | Ch9 — Adding Debug Information |
 | [06. Backend & Driver](06-backend-and-driver.md) | `ObjectEmitter.{h,cpp}`, `main.cpp` | Ch8 — Compiling to Object Code |
+| [07. 최적화 패스](07-passes.md) | `CodeGen::initModule`, `ObjectEmitter` | Ch4 — Adding JIT and Optimizer Support |
+| [08. JIT 구조](08-jit.md) | `KaleidoscopeJIT.h`, `main.cpp` | Ch4, 별도 시리즈 *Building a JIT* |
+
+01–06은 "코드가 무엇을 하는가", 07–08은 **LLVM 인프라를 어떻게 쓰는가**를
+다룹니다. 멘토가 지목한 *Function Pass* 와 *JIT 컴파일러 구조* 가 이 둘입니다.
 
 ## 전체 흐름 한눈에
 
