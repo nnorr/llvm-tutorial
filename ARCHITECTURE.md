@@ -325,6 +325,13 @@ Beyond the structural changes above, nine behavioral ones — all deliberate:
 
    The whole run stays one token rather than being re-split at the second `.`, so
    a typo yields one diagnostic here instead of a cascade of parse errors.
+
+   A rejected token still returns `tok_number` with `NumVal = 0.0` so lexing can
+   continue, which means the parser cannot tell it from a valid literal. The
+   diagnostic alone therefore let `-c` write an object for a program it had
+   already rejected. `Lexer::hadError()` closes that: `runCompile` consults it
+   before emitting, while the REPL ignores it and keeps taking input. The gap
+   surfaced when `test/driver/bad-number.ks` was written.
 8. **The REPL prints all generated IR at EOF.** Ch3/Ch9 end with
    `TheModule->print(errs(), nullptr)`; Ch4–7 cannot, because the JIT has taken
    every module by then. Ours captures the text at each handoff and prints it
@@ -346,9 +353,44 @@ ctest --test-dir build --output-on-failure
 
 | Test | What it covers |
 | --- | --- |
-| `lexer` | 5 unit tests, 84 checks — keywords vs identifiers, number literals incl. the malformed case, operators as raw ASCII, comments/EOF, line-column tracking |
+| `lexer` | 5 unit tests, 87 checks — keywords vs identifiers, number literals incl. the malformed case and `hadError()`, operators as raw ASCII, comments/EOF, line-column tracking |
 | `jit_fib` | `tests/fib.ks` end to end → 89 |
 | `jit_operators` | `tests/operators.ks` — user-defined unary/binary operators with custom precedence, nested if/else, `for` with explicit step → 30 |
+| `lit` | 10 IR tests under `test/`, see below |
+
+### IR tests (`lit` + `FileCheck`)
+
+The three tests above check that the compiler *runs*. They say nothing about
+the IR it produces, which for a frontend is the actual contract. `test/` fills
+that in using the `llvm/test` idiom: each `.ks` file carries its own `RUN:`
+line and its own `CHECK:` expectations, `lit` executes them and `FileCheck`
+matches the output.
+
+```
+test/codegen/     mem2reg, the folded bool round trip, user-operator lowering
+test/debuginfo/   DWARF metadata under -g, no metadata without it,
+                  and that -g really does leave the allocas in place
+test/driver/      top-level expr becomes main, the one-main restriction,
+                  -g requiring -c, malformed literals failing the build
+```
+
+Adding a test is dropping in a file — no rebuild, no C++.
+
+```bash
+lit -v build/test                      # the suite alone
+lit -v build/test/codegen/mem2reg.ks   # one file
+```
+
+Tests run out of the *build* tree because that is where CMake writes the
+generated `lit.site.cfg.py` carrying the path to `toy`. Both tools are
+optional: without them CMake reports `IR tests disabled` and the other three
+suites still run.
+
+These earn their keep. Two deliberate mutations — forcing optimization off
+always, and forcing it on under `-g` — were caught by exactly the tests that
+should catch them (`mem2reg`, `binop-fold`, `user-operators` for the first;
+`no-opt`, `dwarf-metadata` for the second). And writing `bad-number.ks` is what
+exposed the `hadError()` gap in deviation 7 above.
 
 `lexer_tests` links only `src/Lexer.cpp` and **no LLVM libraries at all** — the
 Lexer depends on nothing but `SourceLocation.h`. It uses a few macros rather

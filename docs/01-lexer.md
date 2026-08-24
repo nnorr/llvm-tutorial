@@ -280,6 +280,7 @@ if (isdigit(LastChar) || LastChar == '.') {
     fprintf(stderr, "Error: invalid number literal '%s' at %d:%d\n",
             NumStr.c_str(), CurLoc.Line, CurLoc.Col);
     NumVal = 0.0;
+    HadError = true;
   }
   return tok_number;
 }
@@ -309,6 +310,43 @@ Error: invalid number literal '1.23.45.67' at 1:1
 두 조건의 의미:
 - `End != Start + NumStr.size()` — 끝까지 못 읽음 = 뒤에 쓰레기가 있음
 - `End == Start` — 하나도 못 읽음 = `.` 하나만 있는 경우
+
+### 진단만으로는 부족하다 — `hadError()`
+
+거부된 토큰도 `tok_number`를 반환하고 `NumVal`은 0.0입니다. 렉싱을 계속하기
+위해서인데, 그래서 **파서는 멀쩡한 숫자를 본 것과 구별하지 못합니다.** 처음
+구현에는 진단 출력만 있어서 이런 일이 벌어졌습니다.
+
+```
+$ ./build/toy -c bad.ks -o bad.o     # def bad() 1.23.45;
+Error: invalid number literal '1.23.45' at 1:11
+Wrote bad.o                           ← 오브젝트가 생성됨
+$ echo $?
+0                                     ← 종료 코드 0
+```
+
+생성된 IR은 `ret double 0.000000e+00`입니다. 컴파일러가 스스로 틀렸다고
+말해놓고 결과물을 내놓은 셈입니다. IR 테스트(`test/driver/bad-number.ks`)를
+붙이는 과정에서 드러난 문제입니다.
+
+그래서 Lexer가 실패 사실을 기록하고,
+
+```cpp
+// Lexer.h
+bool hadError() const { return HadError; }
+```
+
+`-c` 드라이버가 오브젝트를 쓰기 전에 확인합니다.
+
+```cpp
+// main.cpp -- runCompile()
+if (Lex.hadError())
+  Failed = true;
+```
+
+REPL은 확인하지 않습니다. 한 줄이 잘못됐다고 세션을 끝낼 이유가 없고, 다음
+입력은 정상적으로 처리하면 됩니다. **같은 오류가 모드에 따라 다르게 처리되는
+것이 의도**입니다.
 
 > **설계 선택**: `1.2.3`을 `1.2`와 `.3` 두 토큰으로 쪼갤 수도 있었습니다.
 > 그러면 오타 하나가 파서 단계에서 알 수 없는 에러 여러 개로 번집니다.
@@ -368,7 +406,7 @@ cmake -S . -B build -G Ninja && cmake --build build
 | 테스트 | 내용 |
 | --- | --- |
 | keywords and identifiers | 키워드 10개 인식, `define`은 식별자, `_`는 식별자 문자가 아님 |
-| numbers | `3`, `3.25`, `.5`, `42.` 정상 / `1.23.45.67`, `.` 거부 |
+| numbers | `3`, `3.25`, `.5`, `42.` 정상 / `1.23.45.67`, `.` 거부, `hadError()` 표시 |
 | operators are raw ascii | `+-*/<>=(),;\|&:!` 가 각자의 ASCII 값으로 나옴 |
 | comments and eof | 주석 무시, 빈 입력, EOF를 여러 번 물어봐도 안전 |
 | source locations | 줄/칸 번호가 올바르게 증가 |
@@ -382,5 +420,7 @@ cmake -S . -B build -G Ninja && cmake --build build
 - `LastChar` 한 글자 미리보기로 토큰 경계를 판단한다
 - `std::istream&`을 받도록 바꾼 덕분에 단위 테스트가 가능해졌다
 - 숫자 리터럴 검증은 튜토리얼에 없는 수정이다
+- 거부된 토큰도 값을 돌려주므로, 실패는 `hadError()`로만 드러난다.
+  `-c`는 이걸 확인해 오브젝트를 안 쓰고, REPL은 무시하고 계속한다
 
 **다음**: [02. AST](02-ast.md) — 토큰으로 만들 트리의 모양

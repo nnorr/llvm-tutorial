@@ -40,6 +40,14 @@ MLIR의 dialect 확장성이 왜 다른 축의 문제인지도 여기서 다룹�
 10은 05와 07이 "`-g`면 최적화를 끈다" 한 줄로 넘어간 부분을 펼쳐서,
 그 제약이 어디서 오는지와 clang/gcc가 `-O2 -g`를 어떻게 지원하는지를 봅니다.
 
+## 테스트
+
+`ctest --test-dir build`가 네 개를 돌립니다. 앞의 셋(`lexer`, `jit_fib`,
+`jit_operators`)은 컴파일러가 도는지 보고, `lit`은 **생성된 IR**을 검사합니다
+— `test/` 아래 `.ks` 파일마다 `RUN:` 줄과 `CHECK:` 기대값이 들어 있는
+`llvm/test` 방식입니다. 자세한 내용은
+[`../ARCHITECTURE.md`](../ARCHITECTURE.md)의 Testing 절에 있습니다.
+
 ## 전체 흐름 한눈에
 
 ```

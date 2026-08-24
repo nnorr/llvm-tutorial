@@ -470,3 +470,40 @@ Kaleidoscope에서는 옳은 거래다 — 문법이 Ch7에서 동결됐으니 *
 
 
 
+
+---
+
+## 6. 테스트 — 두 층
+
+```bash
+ctest --test-dir build --output-on-failure     # 4개 스위트
+```
+
+| 스위트 | 무엇을 |
+| --- | --- |
+| `lexer` | 단위 테스트 87개. LLVM 링크 없음 |
+| `jit_fib`, `jit_operators` | 종단간. JIT 결과값이 89 / 30인지 |
+| `lit` | **IR 테스트 10개** |
+
+앞의 셋은 "컴파일러가 도는가"를 본다. 프론트엔드의 실제 계약인 **생성된 IR**은
+`lit` + `FileCheck`가 본다 — `llvm/test`와 같은 방식으로, 테스트 파일 하나가
+자기 `RUN:` 줄과 `CHECK:` 기대값을 같이 들고 있다.
+
+```
+# RUN: %toy -c %s --emit-llvm -o /dev/null 2>&1 | %filecheck %s
+
+def fib(n) var a = 0, b = 1, c in ... ;
+
+# CHECK-LABEL: define double @fib(double %n)
+# CHECK-NOT:     alloca
+# CHECK:         phi double
+```
+
+`test/codegen`은 mem2reg 승격과 bool 왕복 접힘을, `test/debuginfo`는 `-g`의
+DWARF 메타데이터와 **`-g`에서 alloca가 살아남는 것**을, `test/driver`는 최상위
+식이 `main`이 되는 것과 오류 경로를 검사한다. 테스트 추가는 파일 하나 놓는
+것으로 끝이고 재컴파일이 없다.
+
+효과는 확인됐다. 최적화를 강제로 끄거나 `-g`에서 강제로 켜는 변이를 넣으면
+정확히 해당 테스트만 깨진다. 그리고 `test/driver/bad-number.ks`를 쓰다가
+`Lexer::hadError()`가 없어서 잘못된 리터럴에도 `.o`가 나오던 문제를 찾았다.
