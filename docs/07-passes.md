@@ -145,7 +145,7 @@ PB.crossRegisterProxies(*LAM, *FAM, *CGAM, *MAM);
 
 분석 결과는 **특정 모듈의 IR에 대한** 정보입니다. 모듈이 바뀌면 전부 무효입니다.
 JIT 모드는 함수 정의마다, 최상위 식마다 모듈을 새로 여므로
-([06-backend-and-driver](06-backend-and-driver.md) 3.4절) 매니저도 함께
+([06-backend-and-driver](06-backend-and-driver.md) 3.5절) 매니저도 함께
 새로 만듭니다.
 
 ---
@@ -318,7 +318,7 @@ PHI 노드가 전부 사라졌습니다. **프론트엔드는 단순하고 정�
 `CodeGen::codegen(FunctionAST&)` 끝부분입니다.
 
 ```cpp
-if (Value *RetVal = codegenExpr(F.getBody())) {
+if (Value *RetVal = visit(F.getBody())) {
   Builder->CreateRet(RetVal);
   ...
   verifyFunction(*TheFunction);           // 먼저 IR이 올바른지 검사
@@ -354,6 +354,10 @@ CG.initModule(O.Input, TM->createDataLayout(), /*Optimize=*/!O.Debug);
 전혀 실행하지 않습니다.
 
 `OptimizeFunctions` 플래그는 `initModule`에 저장되고 위 `if`에서 확인됩니다.
+`-c`만 준 경우는 해당하지 않습니다 — 최적화는 그대로 돕니다.
+
+이 제약이 어디서 오는지, 진짜 컴파일러는 왜 `-O2 -g`를 할 수 있는지는
+[10. 디버그 정보와 최적화](10-debuginfo-and-optimization.md)에서 다룹니다.
 
 ---
 

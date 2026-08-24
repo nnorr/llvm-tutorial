@@ -49,21 +49,23 @@ IR dependency** — no `Value*`, no `IRBuilder`, no `codegen()`. Its one LLVM
 include is `llvm/Support/Casting.h`, a header-only utility providing
 `isa<>`/`dyn_cast<>`/`cast<>` on top of the hand-rolled `Kind` discriminator
 (see [LLVM-style RTTI](#llvm-style-rtti)). `ASTDumper` demonstrates the point:
-a full consumer of the AST that includes no LLVM headers whatsoever.
+a full consumer of the AST whose own sources include no LLVM header at all —
+only `<ostream>`, `AST.h` and `ASTVisitor.h`. `lexer_tests` makes the same point
+at link time: `ldd` shows it against `libstdc++` and `libgcc_s`, nothing else.
 
 | File                     | Lines | Responsibility |
 | ------------------------ | ----: | -------------- |
 | `include/SourceLocation.h` | 16 | `{Line, Col}` pair; produced by Lexer, carried by AST, consumed by DebugInfo |
 | `include/Lexer.h` + `src/Lexer.cpp` | 216 | Character stream → tokens, with location tracking |
-| `include/ASTVisitor.h`   | 46 | Double-dispatch interface over the 9 expression nodes |
-| `include/AST.h`          | 296 | Node classes. Pure data + `accept()` |
+| `include/ASTVisitor.h`   | 66 | CRTP dispatcher: one `Kind` switch over the 9 expression nodes |
+| `include/AST.h`          | 279 | Node classes. Pure data — no `accept()`, no knowledge of consumers |
 | `include/OperatorTable.h`| 46 | Binary operator precedence, shared by Parser and CodeGen |
 | `include/Parser.h` + `src/Parser.cpp` | 490 | Recursive descent + precedence climbing; the only thing that builds AST nodes |
-| `include/ASTDumper.h` + `src/ASTDumper.cpp` | 170 | Second visitor: prints the AST as a tree. No LLVM dependency |
-| `include/CodeGen.h` + `src/CodeGen.cpp` | 623 | AST → LLVM IR, as an `ASTVisitor`. Owns the pass pipeline |
+| `include/ASTDumper.h` + `src/ASTDumper.cpp` | 173 | Second visitor: prints the AST as a tree. No LLVM dependency |
+| `include/CodeGen.h` + `src/CodeGen.cpp` | 576 | AST → LLVM IR, as an `ASTVisitor<CodeGen, Value*>`. Owns the pass pipeline |
 | `include/DebugInfo.h` + `src/DebugInfo.cpp` | 127 | DWARF metadata emission; wraps `DIBuilder` |
 | `include/ObjectEmitter.h` + `src/ObjectEmitter.cpp` | 101 | Module → native `.o` via `TargetMachine` |
-| `src/main.cpp`           | 321 | Argument parsing and the two drivers |
+| `src/main.cpp`           | 369 | Argument parsing and the two drivers |
 | `include/KaleidoscopeJIT.h` | 105 | **Vendored** from upstream, unmodified |
 
 ---
@@ -81,7 +83,7 @@ stdin/file → Lexer → Parser → AST → CodeGen ──→ Module ──→ K
                                   DebugInfo (-g)          ObjectEmitter → output.o
 ```
 
-The two modes differ in exactly three ways:
+The two modes differ in exactly four ways:
 
 1. **Module lifetime.** JIT mode hands off a module and reopens a fresh one
    after *every* definition and *every* top-level expression. Compile mode calls
@@ -104,6 +106,12 @@ The two modes differ in exactly three ways:
    `main` for compile (a real entry point). Hence
    `Parser::parseTopLevelExpr(name)`.
 3. **Debug info.** Attached only in compile mode.
+4. **IR output.** The REPL prints every module's IR at EOF, unconditionally —
+   Ch3/Ch9 do this and Ch4–7 do not, because only the former never hand a module
+   away. Since ours does, it captures each module's text at handoff and prints
+   the lot at end of input. Compile mode follows Ch8 instead (object file, no
+   IR) and puts the dump behind `--emit-llvm`; Ch8 and Ch9 cannot both be
+   satisfied, as Ch9 prints IR but writes no `.o`.
 
 ### Why `-g` requires `-c`
 
@@ -125,15 +133,34 @@ The tutorial hangs `virtual Value *codegen()` off each AST node. That is exactly
 why its `IRBuilder`, `NamedValues`, and `TheModule` had to be globals: the nodes
 needed backend state and had no way to receive it.
 
-Here the nodes are passive:
+Here the nodes are passive — and carry nothing for a consumer's benefit, not
+even an `accept()`:
 
 ```cpp
-// AST.h — no LLVM headers
+// AST.h — no LLVM IR headers, and no include of ASTVisitor.h
 class NumberExprAST : public ExprAST {
   double Val;
 public:
-  void accept(ASTVisitor &V) override { V.visit(*this); }
   double getVal() const { return Val; }
+  static bool classof(const ExprAST *E) { return E->getKind() == Expr_Number; }
+};
+```
+
+Dispatch lives entirely in `ASTVisitor.h`, as one switch over the `Kind`
+discriminator, reached through CRTP:
+
+```cpp
+template <typename Derived, typename RetTy = void> class ASTVisitor {
+  Derived &derived() { return *static_cast<Derived *>(this); }
+public:
+  RetTy visit(ExprAST &E) {
+    switch (E.getKind()) {
+    case ExprAST::Expr_Number:
+      return derived().visitNumber(llvm::cast<NumberExprAST>(E));
+    ...
+    }
+    llvm_unreachable("unknown ExprASTKind");
+  }
 };
 ```
 
@@ -141,58 +168,48 @@ and each consumer carries its own state:
 
 ```cpp
 // CodeGen.h
-class CodeGen : public ASTVisitor {
+class CodeGen : public ASTVisitor<CodeGen, llvm::Value *> {
+  friend class ASTVisitor<CodeGen, llvm::Value *>;
   std::unique_ptr<llvm::IRBuilder<>> Builder;
   std::map<std::string, llvm::AllocaInst *> NamedValues;
-  llvm::Value *Result = nullptr;
-  void visit(NumberExprAST &E) override;
+  llvm::Value *visitNumber(NumberExprAST &E);
   ...
 };
 ```
 
-### The `Result` member
-
-`visit()` cannot return `llvm::Value*` — that is precisely the type the AST must
-not know about. So visitors that produce a value stash it and expose a typed
-wrapper:
-
-```cpp
-llvm::Value *CodeGen::codegenExpr(ExprAST &E) {
-  Result = nullptr;
-  E.accept(*this);
-  return Result;
-}
-```
-
-This is safe under recursion only because every caller reads `Result` into a
-local *immediately*. `visit(BinaryExprAST&)` does:
-
-```cpp
-Value *L = codegenExpr(E.getLHS());   // captured before...
-Value *R = codegenExpr(E.getRHS());   // ...this overwrites Result
-```
-
-If you add a node, keep that discipline — leaving a value in `Result` across a
-nested `codegenExpr()` call is the one way to break this design.
+This is the shape Clang uses in `StmtVisitor`. It is deliberately *not* the
+textbook `accept()`/`visit()` double dispatch, which this repo used earlier and
+then replaced; [docs/09-visitor-evolution.md](docs/09-visitor-evolution.md)
+records both designs and why the trade went the way it did.
 
 `PrototypeAST` and `FunctionAST` do **not** derive from `ExprAST` and are not in
 the visitor. `CodeGen` handles them through overloads:
 `codegen(PrototypeAST&)` and `codegen(FunctionAST&)`.
 
-### Two visitors, two shapes
+### Two visitors, two return types
 
 `ASTDumper` is the second consumer, and it exists as much to justify the pattern
 as to be useful. Compare:
 
-| | produces | needs `Result`? | LLVM headers |
+| | produces | `RetTy` | LLVM headers |
 | --- | --- | --- | --- |
-| `CodeGen` | `llvm::Value*` | yes | IR, passes |
-| `ASTDumper` | output on an `ostream` | no — plain `void` | none |
+| `CodeGen` | `llvm::Value*` | `llvm::Value *` | IR, passes |
+| `ASTDumper` | output on an `ostream` | `void` (default) | none |
+
+Two return types over one dispatcher is exactly what a virtual `accept()` could
+not express: a virtual function cannot vary its return type per visitor, which
+is why the earlier design had to route `Value*` through a member variable.
 
 In the tutorial, `dump()` was a virtual method on every node sitting directly
 beside `codegen()`, so the AST carried both concerns at once. Here it carries
 neither, and adding a third consumer (a type checker, a constant folder) means
 writing one new class and touching no existing node.
+
+The reverse is now the expensive direction: a new node kind means editing the
+switch in `ASTVisitor.h` and every visitor. That is a closed-world design, and
+a deliberate one — the grammar froze at Ch7. An IR whose operation set is open
+(MLIR, where dialects register ops at runtime) cannot be built this way at all;
+see the last section of the evolution doc.
 
 ## LLVM-style RTTI
 
@@ -216,9 +233,9 @@ C++ RTTI because it is normally built `-fno-rtti`, so `dynamic_cast` is
 unavailable — and because a tag comparison is far cheaper than a `dynamic_cast`
 walk. It is also the same shape MLIR's Toy AST uses, so it transfers directly.
 
-The visitor means this is rarely needed — dispatch already happens through
-`accept()`. It is used in exactly one place, `Parser::parseBinOpRHS`, to check
-that the destination of `=` is an identifier.
+`ASTVisitor::visit` is built on the same `Kind` tag, so consumers rarely reach
+for `dyn_cast` directly. It is used in exactly one place,
+`Parser::parseBinOpRHS`, to check that the destination of `=` is an identifier.
 
 ---
 
@@ -265,7 +282,7 @@ serve stdin (JIT) and a file (compile), and makes it testable from a
 
 ## Deviations from the tutorial
 
-Beyond the structural changes above, seven behavioral ones — all deliberate:
+Beyond the structural changes above, nine behavioral ones — all deliberate:
 
 1. **Fixed a use-after-move.** Ch9 line 1310 dereferences `Proto` after moving it
    into `FunctionProtos` at line 1235 — a null `unique_ptr` deref on the error
@@ -308,6 +325,16 @@ Beyond the structural changes above, seven behavioral ones — all deliberate:
 
    The whole run stays one token rather than being re-split at the second `.`, so
    a typo yields one diagnostic here instead of a cascade of parse errors.
+8. **The REPL prints all generated IR at EOF.** Ch3/Ch9 end with
+   `TheModule->print(errs(), nullptr)`; Ch4–7 cannot, because the JIT has taken
+   every module by then. Ours captures the text at each handoff and prints it
+   together at end of input, so a session ends with the same overview.
+9. **One prompt per construct.** The tutorial prints `ready> ` at the top of
+   every `MainLoop` iteration, and the parser does not consume the trailing
+   `;` — so a normal session shows `ready> ready> `. Here `case ';'` skips the
+   prompt. Everything else in the REPL output is byte-identical to Ch7; the
+   comparison recipe is in
+   [docs/06-backend-and-driver.md](docs/06-backend-and-driver.md).
 
 ---
 
@@ -344,11 +371,11 @@ the loop semantics described above.
 | ------- | -------- |
 | 1 — Lexer | `Lexer.{h,cpp}` |
 | 2 — Parser / AST | `AST.h`, `ASTVisitor.h`, `Parser.{h,cpp}`, `OperatorTable.h` |
-| 3 — IR generation | `CodeGen::visit(...)`, `codegen(PrototypeAST&)`, `codegen(FunctionAST&)` |
+| 3 — IR generation | `CodeGen::visitNumber(...)` etc., `codegen(PrototypeAST&)`, `codegen(FunctionAST&)` |
 | 4 — JIT + optimizer | `CodeGen::initModule` (pass pipeline), `runInteractive()` in `main.cpp` |
-| 5 — Control flow | `visit(IfExprAST&)`, `visit(ForExprAST&)` |
-| 6 — User-defined operators | `visit(UnaryExprAST&)`, `OperatorTable`, `Parser::parsePrototype` |
-| 7 — Mutable variables | `visit(VarExprAST&)`, `AssignExprAST`, `CodeGen::createEntryBlockAlloca`, `PromotePass` |
+| 5 — Control flow | `visitIf`, `visitFor` |
+| 6 — User-defined operators | `visitUnary`, `OperatorTable`, `Parser::parsePrototype` |
+| 7 — Mutable variables | `visitVar`, `AssignExprAST`, `CodeGen::createEntryBlockAlloca`, `PromotePass` |
 | 8 — Object code | `ObjectEmitter.{h,cpp}`, `runCompile()` |
 | 9 — Debug info | `DebugInfo.{h,cpp}`, `SourceLocation.h`, `-g` path |
 | 9 — per-node `dump()` | `ASTDumper.{h,cpp}` — reworked into a visitor, behind `--dump-ast` |
@@ -409,6 +436,7 @@ later to win.
 ./build/toy -c tests/fib.ks              # -> output.o
 ./build/toy -c tests/fib.ks -g -o fib.o  # with DWARF
 ./build/toy --dump-ast < tests/fib.ks    # print the parse tree
+./build/toy -c tests/fib.ks --emit-llvm  # ...and print the module's IR
 ```
 
 `build.sh` remains for compiling the single-file reference chapters:

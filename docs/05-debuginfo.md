@@ -313,8 +313,12 @@ CG.initModule(O.Input, TM->createDataLayout(), /*Optimize=*/!O.Debug);
 - 원본 튜토리얼 Ch9도 패스를 전혀 실행하지 않습니다
 - 최적화는 명령어를 재배치·병합·삭제하므로, 줄 번호가 소스와 어긋나
   디버거에서 "실행이 이리저리 튀는" 현상이 생깁니다
+- 무엇보다 mem2reg가 `alloca`를 없애면, 4.5절의 `insertDeclare`가 가리킬
+  주소 자체가 사라집니다
 
-실제 컴파일러의 `-O0 -g` 조합과 같은 이유입니다.
+실제 컴파일러의 `-O0 -g` 조합과 같은 이유입니다. 다만 clang/gcc는 `-O2 -g`도
+지원하는데, 그건 `dbg_declare` 대신 `dbg_value`를 쓰기 때문입니다 →
+[10. 디버그 정보와 최적화](10-debuginfo-and-optimization.md)
 
 ---
 

@@ -115,15 +115,15 @@ public:
   NumberExprAST(SourceLocation Loc, double Val)
       : ExprAST(Expr_Number, Loc), Val(Val) {}
 
-  void accept(ASTVisitor &V) override { V.visit(*this); }   // 방문자에게 넘김
-
   double getVal() const { return Val; }                     // 값을 읽는 통로
 
   static bool classof(const ExprAST *E) { return E->getKind() == Expr_Number; }
 };
 ```
 
-`codegen()`이 없습니다. 대신 `accept()`가 있습니다.
+`codegen()`이 없습니다. **그 자리에 아무것도 없습니다.** 생성자, getter,
+`classof` — 전부 이 노드 자신에 대한 것뿐이고, 소비자를 위해 붙은 것은 하나도
+없습니다. `AST.h`는 `ASTVisitor.h`를 include조차 하지 않습니다(방향이 반대).
 
 ---
 
@@ -141,97 +141,99 @@ else if (타입이 VariableExprAST) { ... }
 else if (...)   // 노드 종류가 늘 때마다 모든 if 사슬을 고쳐야 함
 ```
 
-Visitor 패턴은 이 분기를 **C++의 가상 함수 기능에 맡깁니다.**
+Visitor 패턴은 이 분기를 **한 곳에 몰아넣고**, 각 소비자는 노드별 처리만
+쓰게 합니다.
 
-### 4.2 구조
+### 4.2 구조 — CRTP + `Kind` 스위치
 
-**(1) 방문자 인터페이스** — `ASTVisitor.h`
+`ASTVisitor.h` 전체가 사실상 함수 하나입니다.
 
 ```cpp
-class ASTVisitor {
-public:
-  virtual ~ASTVisitor() = default;
+template <typename Derived, typename RetTy = void> class ASTVisitor {
+  Derived &derived() { return *static_cast<Derived *>(this); }
 
-  virtual void visit(NumberExprAST &E) = 0;
-  virtual void visit(VariableExprAST &E) = 0;
-  virtual void visit(UnaryExprAST &E) = 0;
-  virtual void visit(BinaryExprAST &E) = 0;
-  virtual void visit(AssignExprAST &E) = 0;
-  virtual void visit(CallExprAST &E) = 0;
-  virtual void visit(IfExprAST &E) = 0;
-  virtual void visit(ForExprAST &E) = 0;
-  virtual void visit(VarExprAST &E) = 0;
+public:
+  RetTy visit(ExprAST &E) {
+    switch (E.getKind()) {
+    case ExprAST::Expr_Number:
+      return derived().visitNumber(llvm::cast<NumberExprAST>(E));
+    case ExprAST::Expr_Binary:
+      return derived().visitBinary(llvm::cast<BinaryExprAST>(E));
+    // ... 9개
+    }
+    llvm_unreachable("unknown ExprASTKind");
+  }
 };
 ```
 
-전부 `= 0`(순수 가상)이므로 **`ASTVisitor`를 상속하는 클래스는 9개를 전부
-구현해야 합니다.** 노드를 새로 추가하면 모든 방문자가 컴파일 에러를 내며
-"나도 처리해 달라"고 알려줍니다. 빠뜨릴 수가 없습니다.
+읽을 것이 세 가지입니다.
 
-같은 이름 `visit`이 9번 나오는 것은 **오버로딩(overloading)** 입니다.
-인자 타입이 다르면 같은 이름을 여러 번 정의할 수 있고, 호출할 때 인자 타입을
-보고 컴파일러가 알맞은 것을 고릅니다.
+**(1) `E.getKind()` 스위치.** 5절의 `Kind` 판별자를 그대로 씁니다. 4.1에서
+"쓰고 싶지 않다"던 `if` 사슬이 사실 여기 있습니다 — 다만 **딱 한 번, 한 곳에만**
+있고, 소비자는 이걸 다시 쓰지 않습니다. `default:`를 일부러 두지 않아서
+`ExprASTKind`에 항목을 추가하면 `-Wswitch`가 여기를 지목합니다.
 
-**(2) 노드의 `accept`** — `AST.h`
-
-모든 노드가 똑같이 한 줄입니다.
+**(2) `Derived` 템플릿 인자 — CRTP.** `CodeGen`이 자기 자신을 부모에게 알려주는
+구조입니다.
 
 ```cpp
-void accept(ASTVisitor &V) override { V.visit(*this); }
+class CodeGen : public ASTVisitor<CodeGen, llvm::Value *> { ... };
+//                                ^^^^^^^ 자기 자신을 넘긴다
 ```
 
-`*this`는 "나 자신"입니다. `NumberExprAST` 안에서 쓰면 타입이
-`NumberExprAST&`이므로, `visit(NumberExprAST&)` 가 선택됩니다.
+부모가 `static_cast<Derived*>(this)`로 자식을 되찾으므로, `derived().visitNumber(...)`
+는 **가상 함수가 아니라 평범한 함수 호출**입니다. vtable을 타지 않습니다.
 
-### 4.3 이중 디스패치(double dispatch)가 일어나는 과정
+**(3) `RetTy`.** 이게 CRTP를 쓰는 이유입니다 — 4.4에서 다룹니다.
+
+### 4.3 디스패치 과정
 
 ```cpp
-ExprAST *E = /* 실제로는 NumberExprAST */;
 CodeGen CG(...);
-E->accept(CG);
+ExprAST &E = /* 실제로는 NumberExprAST */;
+Value *V = CG.visit(E);
 ```
 
-1. `E->accept(CG)` — `accept`는 `virtual`이므로, `E`가 가리키는 **실제 타입**인
-   `NumberExprAST::accept`가 불립니다. **(첫 번째 디스패치)**
-2. 그 안의 `V.visit(*this)` — `*this`의 타입이 `NumberExprAST&`로 확정돼 있으므로
-   `visit(NumberExprAST&)` 오버로드가 선택되고, `V`가 `virtual`이므로
-   `CodeGen::visit(NumberExprAST&)`가 불립니다. **(두 번째 디스패치)**
+1. `CG.visit(E)` — 상속받은 `ASTVisitor<CodeGen, Value*>::visit`이 불립니다.
+2. `E.getKind()`가 `Expr_Number`이므로 그 `case`로 갑니다.
+3. `llvm::cast<NumberExprAST>(E)`로 타입을 좁히고 —
+   `Kind`를 이미 확인했으니 안전합니다 (5절 참고).
+4. `derived().visitNumber(...)` — `CodeGen::visitNumber`가 직접 호출됩니다.
 
-두 번 갈라지므로 "이중 디스패치"입니다. 결과적으로
-**"어떤 노드 × 어떤 방문자"** 조합이 `if` 사슬 없이 정확히 결정됩니다.
+분기가 런타임에 일어나는 곳은 **2번의 스위치 하나뿐**입니다.
 
-### 4.4 값을 돌려받는 방법 — `Result` 멤버
+> **이전 버전은 달랐습니다.** 예전에는 노드마다 `virtual void accept(ASTVisitor&)`가
+> 있었고, 디스패치가 vtable을 두 번 타는 *이중 디스패치(double dispatch)* 였습니다.
+> 왜 바꿨는지는 [09. Visitor 설계 변천](09-visitor-evolution.md)에 정리했습니다.
 
-`visit()`의 반환 타입은 `void`입니다. 그런데 CodeGen은 `llvm::Value*`를
-만들어야 합니다. 왜 `visit`이 `Value*`를 반환하지 않을까요?
+### 4.4 반환 타입 — `RetTy`
 
-**그러면 `ASTVisitor.h`가 LLVM 헤더를 포함해야 하고, `AST.h`가 그걸 포함하므로,
-AST 전체가 LLVM에 묶여 버리기 때문입니다.** AST를 백엔드로부터 떼어놓는다는
-목적이 무너집니다.
-
-해결책은 방문자가 결과를 **자기 멤버 변수에 넣어두는** 것입니다.
+`CodeGen`은 `llvm::Value*`를 만들어야 하고, `ASTDumper`는 출력만 하면 됩니다.
+같은 디스패처를 쓰면서 반환 타입이 다릅니다.
 
 ```cpp
-// CodeGen.h
-llvm::Value *Result = nullptr;
+class CodeGen   : public ASTVisitor<CodeGen, llvm::Value *> { ... };
+class ASTDumper : public ASTVisitor<ASTDumper> { ... };   // RetTy = void (기본값)
+```
 
-// CodeGen.cpp
-llvm::Value *CodeGen::codegenExpr(ExprAST &E) {
-  Result = nullptr;
-  E.accept(*this);     // 이 안에서 visit()이 Result를 채운다
-  return Result;
+템플릿이라 인스턴스가 각각 따로 만들어지므로 가능합니다. 그래서 `CodeGen`의
+노드 처리는 그냥 값을 반환합니다.
+
+```cpp
+Value *CodeGen::visitBinary(BinaryExprAST &E) {
+  Value *L = visit(E.getLHS());      // 재귀도 그냥 반환값으로
+  Value *R = visit(E.getRHS());
+  if (!L || !R)
+    return nullptr;
+  ...
+  return Builder->CreateFAdd(L, R, "addtmp");
 }
 ```
 
-**주의할 점**: `Result`는 하나뿐이라 재귀 호출 시 덮어써집니다. 그래서 호출한
-쪽은 **즉시** 지역 변수로 받아야 합니다.
-
-```cpp
-Value *L = codegenExpr(E.getLHS());   // 여기서 Result를 L로 받고
-Value *R = codegenExpr(E.getRHS());   // 그 다음에 Result가 덮어써짐 — 안전
-```
-
-노드를 추가할 때 이 규칙만 지키면 됩니다.
+**가상 함수였다면 이게 불가능합니다.** 가상 함수는 반환 타입을 방문자마다 다르게
+할 수 없으니, `void visit(...)`로 고정하고 결과를 멤버 변수에 담아 두는 우회가
+필요했습니다. 그 우회가 어떻게 생겼었는지도
+[09. Visitor 설계 변천](09-visitor-evolution.md)에 있습니다.
 
 ### 4.5 방문자가 둘인 이유 — `ASTDumper`
 
@@ -240,10 +242,10 @@ Value *R = codegenExpr(E.getRHS());   // 그 다음에 Result가 덮어써짐 �
 
 두 방문자를 비교하면 패턴의 값어치가 보입니다.
 
-| | 만들어 내는 것 | `Result` 필요? | LLVM 헤더 |
+| | 만들어 내는 것 | `RetTy` | LLVM 헤더 |
 | --- | --- | --- | --- |
-| `CodeGen` | `llvm::Value*` | 예 | IR, 패스 등 다수 |
-| `ASTDumper` | 화면 출력 | 아니오 (`void`로 충분) | **전혀 없음** |
+| `CodeGen` | `llvm::Value*` | `llvm::Value *` | IR, 패스 등 다수 |
+| `ASTDumper` | 화면 출력 | `void` (기본값) | **전혀 없음** |
 
 `ASTDumper`는 `<ostream>` 하나만 씁니다. 같은 AST를 LLVM과 무관한 방식으로도
 소비할 수 있다는 증거입니다.
@@ -254,14 +256,19 @@ Value *R = codegenExpr(E.getRHS());   // 그 다음에 Result가 덮어써짐 �
 건드릴 필요가 없습니다.**
 
 ```cpp
-// src/ASTDumper.cpp — 출력만 하므로 Result가 없다
-void ASTDumper::visit(BinaryExprAST &E) {
+// src/ASTDumper.cpp — 반환할 것이 없으므로 void
+void ASTDumper::visitBinary(BinaryExprAST &E) {
   line("Binary ") << '\'' << E.getOp() << "' @" << E.getLine() << ':'
                   << E.getCol() << '\n';
   child("LHS:", E.getLHS());
   child("RHS:", E.getRHS());
 }
 ```
+
+거꾸로, **노드 종류를 늘리는 것은 비싸집니다.** `ASTVisitor.h`의 스위치와
+방문자 두 개를 모두 고쳐야 합니다. 이 맞교환이 무엇인지, 그리고 MLIR처럼
+연산 집합이 열려 있는 IR에서는 왜 이 설계가 아예 성립하지 않는지는
+[09. Visitor 설계 변천](09-visitor-evolution.md)에서 다룹니다.
 
 ---
 
@@ -447,9 +454,10 @@ Parser.cpp 의 ExprAST   ≠   main.cpp 의 ExprAST     ← 이름은 같지만 
 - AST는 우선순위와 괄호가 이미 반영된 **구조**다
 - 이 저장소의 노드는 **데이터만** 갖는다. 튜토리얼의 전역 변수는 노드에
   `codegen()`을 달았기 때문에 생긴 것이다
-- Visitor 패턴 = `accept` + `visit` 이중 디스패치. 노드 추가 시 방문자가
-  컴파일 에러로 알려준다
-- 값 반환은 방문자의 `Result` 멤버로. 반드시 즉시 지역 변수에 받을 것
+- Visitor = CRTP + `Kind` 스위치. 분기는 `ASTVisitor.h` 한 곳에만 있고,
+  노드를 추가하면 `-Wswitch`가 거기를 지목한다
+- 방문자마다 반환 타입이 다르다 (`RetTy`). 가상 함수로는 불가능했던 부분
+  — [09. Visitor 설계 변천](09-visitor-evolution.md)
 - `Kind` + `classof` = LLVM 방식 RTTI. `dynamic_cast`보다 빠르고 `-fno-rtti`에서도 동작
 - `AssignExprAST`로 "변수 아닌 것에 대입"을 표현 불가능하게 만들었다 (원본은 세그폴트)
 - 헤더에서 익명 네임스페이스 금지

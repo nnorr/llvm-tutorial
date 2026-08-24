@@ -99,7 +99,9 @@ Value *V = Builder->CreateFAdd(L, R, "addtmp"); // fadd 명령어 생성 + 삽�
 ## 2. CodeGen 클래스
 
 ```cpp
-class CodeGen : public ASTVisitor {
+class CodeGen : public ASTVisitor<CodeGen, llvm::Value *> {
+  friend class ASTVisitor<CodeGen, llvm::Value *>;
+
   OperatorTable &Ops;              // 우선순위표 (사용자 정의 연산자 등록용)
   DebugInfo *Dbg = nullptr;        // -g일 때만 존재
 
@@ -119,15 +121,16 @@ class CodeGen : public ASTVisitor {
   std::map<std::string, llvm::AllocaInst *> NamedValues;
   std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
 
-  llvm::Value *Result = nullptr;
   ...
 };
 ```
 
 원본 튜토리얼에서 이 12개가 전부 **전역 변수**였습니다. 여기서는 멤버입니다.
 
-`: public ASTVisitor` — [02-ast](02-ast.md)의 방문자 인터페이스를 구현합니다.
-그래서 `visit()` 9개를 반드시 정의해야 합니다.
+`ASTVisitor<CodeGen, llvm::Value *>` — [02-ast](02-ast.md)의 방문자 베이스에
+자기 자신(CRTP)과 반환 타입을 넘깁니다. 그래서 `visitNumber` 등 9개의 훅을
+정의해야 하고, 각각 `llvm::Value*`를 반환합니다. `friend` 선언은 베이스가
+private인 훅을 부를 수 있게 하려는 것입니다.
 
 `Dbg`만 포인터인 이유: 디버그 정보는 `-g`일 때만 있으므로 "없음"을 표현해야
 합니다. `Ops`는 항상 있으므로 참조입니다.
@@ -196,47 +199,51 @@ IR을 입력받아 더 나은 IR로 바꾸는 변환기입니다. 위 5개는 �
 
 ### 4.1 진입점
 
+진입점이 따로 없습니다. 베이스에서 상속받은 `visit(ExprAST &)`가 그대로
+진입점입니다 ([02-ast](02-ast.md) 4.2절).
+
 ```cpp
-Value *CodeGen::codegenExpr(ExprAST &E) {
-  Result = nullptr;
-  E.accept(*this);
-  return Result;
-}
+Value *V = visit(E);        // Kind로 갈라져 알맞은 visitXxx가 불리고, 값을 반환
 ```
 
-[02-ast](02-ast.md) 4.4절의 `Result` 트릭입니다. `accept`가 알맞은 `visit`을
-부르고, `visit`이 `Result`를 채웁니다.
+재귀도 이 한 줄입니다. 반환값이 곧 결과이므로 중간 저장소가 없습니다.
+
+> 예전에는 `visit()`이 `void`라서 결과를 `Result` 멤버에 담고 `codegenExpr()`로
+> 꺼내야 했습니다. 왜 그랬고 왜 없앴는지는
+> [09. Visitor 설계 변천](09-visitor-evolution.md) 3–4절에 있습니다.
 
 ### 4.2 숫자
 
 ```cpp
-void CodeGen::visit(NumberExprAST &E) {
+Value *CodeGen::visitNumber(NumberExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
-  Result = ConstantFP::get(*Ctx, APFloat(E.getVal()));
+  return ConstantFP::get(*Ctx, APFloat(E.getVal()));
 }
 ```
 
 `ConstantFP`는 부동소수점 상수입니다. **명령어가 아니라 값**이라 어떤 블록에도
 들어가지 않습니다. 같은 값을 여러 번 요청하면 LLVM이 같은 객체를 돌려줍니다.
 
-`if (Dbg)` 패턴이 모든 `visit`에 나옵니다. `-g`가 아니면 `Dbg`가 `nullptr`이라
+`if (Dbg)` 패턴이 모든 훅에 나옵니다. `-g`가 아니면 `Dbg`가 `nullptr`이라
 건너뜁니다.
 
 ### 4.3 변수 참조
 
 ```cpp
-void CodeGen::visit(VariableExprAST &E) {
+Value *CodeGen::visitVariable(VariableExprAST &E) {
   AllocaInst *V = NamedValues[E.getName()];
-  if (!V) {
-    Result = logErrorV("Unknown variable name");
-    return;
-  }
+  if (!V)
+    return logErrorV("Unknown variable name");
+
   if (Dbg)
     Dbg->emitLocation(&E);
-  Result = Builder->CreateLoad(Type::getDoubleTy(*Ctx), V, E.getName().c_str());
+  return Builder->CreateLoad(Type::getDoubleTy(*Ctx), V, E.getName().c_str());
 }
 ```
+
+`logErrorV`는 메시지를 찍고 `nullptr`을 돌려주므로, 그대로 `return`하면
+실패가 위로 전파됩니다.
 
 `NamedValues`는 **이름 → 스택 슬롯** 사전입니다. 변수를 읽는다는 것은 그
 슬롯에서 값을 **불러오는(load)** 것입니다.
@@ -247,35 +254,37 @@ void CodeGen::visit(VariableExprAST &E) {
 ### 4.4 이항 연산자
 
 ```cpp
-void CodeGen::visit(BinaryExprAST &E) {
+Value *CodeGen::visitBinary(BinaryExprAST &E) {
   if (Dbg) Dbg->emitLocation(&E);
 
-  Value *L = codegenExpr(E.getLHS());
-  Value *R = codegenExpr(E.getRHS());
-  if (!L || !R) { Result = nullptr; return; }
+  Value *L = visit(E.getLHS());
+  Value *R = visit(E.getRHS());
+  if (!L || !R)
+    return nullptr;
 
   switch (E.getOp()) {
-  case '+': Result = Builder->CreateFAdd(L, R, "addtmp"); return;
-  case '-': Result = Builder->CreateFSub(L, R, "subtmp"); return;
-  case '*': Result = Builder->CreateFMul(L, R, "multmp"); return;
+  case '+': return Builder->CreateFAdd(L, R, "addtmp");
+  case '-': return Builder->CreateFSub(L, R, "subtmp");
+  case '*': return Builder->CreateFMul(L, R, "multmp");
   case '<':
     L = Builder->CreateFCmpULT(L, R, "cmptmp");
-    Result = Builder->CreateUIToFP(L, Type::getDoubleTy(*Ctx), "booltmp");
-    return;
+    return Builder->CreateUIToFP(L, Type::getDoubleTy(*Ctx), "booltmp");
   default:
     break;
   }
 
   // 내장 연산자가 아니면 사용자 정의 연산자 = 그냥 함수 호출
   Function *F = getFunction(std::string("binary") + E.getOp());
-  if (!F) { Result = logErrorV("binary operator not found"); return; }
+  if (!F)
+    return logErrorV("binary operator not found");
 
   Value *Ops2[] = {L, R};
-  Result = Builder->CreateCall(F, Ops2, "binop");
+  return Builder->CreateCall(F, Ops2, "binop");
 }
 ```
 
-`L`과 `R`을 **즉시 지역 변수에 받는 것**을 주목하세요. `Result` 규칙입니다.
+`visit(E.getLHS())`가 좌변 전체의 IR을 만들고 그 값을 돌려줍니다. 재귀가
+평범한 함수 호출로 보이는 것이 이 설계의 요점입니다.
 
 `<` 만 두 단계인 이유: `fcmp`는 `i1`(1비트 불리언)을 돌려주는데 Kaleidoscope의
 값은 전부 `double`이어야 하므로, `CreateUIToFP`로 `0.0`/`1.0`으로 바꿉니다.
@@ -287,50 +296,52 @@ void CodeGen::visit(BinaryExprAST &E) {
 
 ```cpp
 Function *F = getFunction(std::string("unary") + E.getOpcode());
-Result = Builder->CreateCall(F, OperandV, "unop");
+return Builder->CreateCall(F, OperandV, "unop");
 ```
 
 ### 4.5 대입
 
 ```cpp
-void CodeGen::visit(AssignExprAST &E) {
+Value *CodeGen::visitAssign(AssignExprAST &E) {
   if (Dbg) Dbg->emitLocation(&E);
 
-  Value *Val = codegenExpr(E.getValue());
-  if (!Val) { Result = nullptr; return; }
+  Value *Val = visit(E.getValue());
+  if (!Val)
+    return nullptr;
 
   AllocaInst *Variable = NamedValues[E.getName()];
-  if (!Variable) { Result = logErrorV("Unknown variable name"); return; }
+  if (!Variable)
+    return logErrorV("Unknown variable name");
 
   Builder->CreateStore(Val, Variable);
-  Result = Val;
+  return Val;
 }
 ```
 
 **캐스팅도 실패 경로도 없습니다.** 파서가 이미 "왼쪽은 식별자"를 보장했고
 이름을 문자열로 넘겨줬기 때문입니다 ([03-parser](03-parser.md) 6절).
 
-`Result = Val` — 대입식도 값을 가집니다. 그래서 `a = b = 5` 같은 연쇄가
+`return Val` — 대입식도 값을 가집니다. 그래서 `a = b = 5` 같은 연쇄가
 원리상 가능합니다.
 
 ### 4.6 함수 호출
 
 ```cpp
-void CodeGen::visit(CallExprAST &E) {
+Value *CodeGen::visitCall(CallExprAST &E) {
   Function *CalleeF = getFunction(E.getCallee());
-  if (!CalleeF) { Result = logErrorV("Unknown function referenced"); return; }
+  if (!CalleeF)
+    return logErrorV("Unknown function referenced");
 
-  if (CalleeF->arg_size() != E.getArgs().size()) {
-    Result = logErrorV("Incorrect # arguments passed");
-    return;
-  }
+  if (CalleeF->arg_size() != E.getArgs().size())
+    return logErrorV("Incorrect # arguments passed");
 
   std::vector<Value *> ArgsV;
   for (const auto &Arg : E.getArgs()) {
-    ArgsV.push_back(codegenExpr(*Arg));
-    if (!ArgsV.back()) { Result = nullptr; return; }
+    ArgsV.push_back(visit(*Arg));
+    if (!ArgsV.back())
+      return nullptr;
   }
-  Result = Builder->CreateCall(CalleeF, ArgsV, "calltmp");
+  return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
 }
 ```
 
@@ -341,9 +352,10 @@ void CodeGen::visit(CallExprAST &E) {
 Kaleidoscope의 `if`는 **값을 내는 식**이므로 SSA에서 `phi`가 필요합니다.
 
 ```cpp
-void CodeGen::visit(IfExprAST &E) {
-  Value *CondV = codegenExpr(E.getCond());
-  if (!CondV) { Result = nullptr; return; }
+Value *CodeGen::visitIf(IfExprAST &E) {
+  Value *CondV = visit(E.getCond());
+  if (!CondV)
+    return nullptr;
 
   // double 조건을 i1로: "0이 아니면 참"
   CondV = Builder->CreateFCmpONE(CondV, ConstantFP::get(*Ctx, APFloat(0.0)),
@@ -359,16 +371,18 @@ void CodeGen::visit(IfExprAST &E) {
 
   // then 블록
   Builder->SetInsertPoint(ThenBB);
-  Value *ThenV = codegenExpr(E.getThen());
-  if (!ThenV) { Result = nullptr; return; }
+  Value *ThenV = visit(E.getThen());
+  if (!ThenV)
+    return nullptr;
   Builder->CreateBr(MergeBB);
   ThenBB = Builder->GetInsertBlock();     // ★ 갱신
 
   // else 블록
   TheFunction->insert(TheFunction->end(), ElseBB);
   Builder->SetInsertPoint(ElseBB);
-  Value *ElseV = codegenExpr(E.getElse());
-  if (!ElseV) { Result = nullptr; return; }
+  Value *ElseV = visit(E.getElse());
+  if (!ElseV)
+    return nullptr;
   Builder->CreateBr(MergeBB);
   ElseBB = Builder->GetInsertBlock();     // ★ 갱신
 
@@ -378,7 +392,7 @@ void CodeGen::visit(IfExprAST &E) {
   PHINode *PN = Builder->CreatePHI(Type::getDoubleTy(*Ctx), 2, "iftmp");
   PN->addIncoming(ThenV, ThenBB);
   PN->addIncoming(ElseV, ElseBB);
-  Result = PN;
+  return PN;
 }
 ```
 
@@ -395,12 +409,12 @@ void CodeGen::visit(IfExprAST &E) {
 ### 4.8 `for` — do-while 이라는 함정
 
 ```cpp
-void CodeGen::visit(ForExprAST &E) {
+Value *CodeGen::visitFor(ForExprAST &E) {
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
 
   AllocaInst *Alloca = createEntryBlockAlloca(TheFunction, E.getVarName());
 
-  Value *StartVal = codegenExpr(E.getStart());
+  Value *StartVal = visit(E.getStart());
   Builder->CreateStore(StartVal, Alloca);
 
   BasicBlock *LoopBB = BasicBlock::Create(*Ctx, "loop", TheFunction);
@@ -411,12 +425,13 @@ void CodeGen::visit(ForExprAST &E) {
   AllocaInst *OldVal = NamedValues[E.getVarName()];
   NamedValues[E.getVarName()] = Alloca;
 
-  if (!codegenExpr(E.getBody())) { Result = nullptr; return; }
+  if (!visit(E.getBody()))
+    return nullptr;
 
-  Value *StepVal = E.getStep() ? codegenExpr(*E.getStep())
+  Value *StepVal = E.getStep() ? visit(*E.getStep())
                                : ConstantFP::get(*Ctx, APFloat(1.0));
 
-  Value *EndCond = codegenExpr(E.getEnd());     // ← 조건을 여기서 계산
+  Value *EndCond = visit(E.getEnd());     // ← 조건을 여기서 계산
 
   Value *CurVar  = Builder->CreateLoad(Type::getDoubleTy(*Ctx), Alloca, ...);
   Value *NextVar = Builder->CreateFAdd(CurVar, StepVal, "nextvar");
@@ -432,7 +447,7 @@ void CodeGen::visit(ForExprAST &E) {
   if (OldVal) NamedValues[E.getVarName()] = OldVal;
   else        NamedValues.erase(E.getVarName());
 
-  Result = Constant::getNullValue(Type::getDoubleTy(*Ctx));   // for는 항상 0.0
+  return Constant::getNullValue(Type::getDoubleTy(*Ctx));   // for는 항상 0.0
 }
 ```
 
@@ -457,7 +472,7 @@ Evaluated to 30.000000        ← C 감각으로는 20 (0+2+4+6+8)
 ### 4.9 `var` — 지역 변수
 
 ```cpp
-void CodeGen::visit(VarExprAST &E) {
+Value *CodeGen::visitVar(VarExprAST &E) {
   std::vector<AllocaInst *> OldBindings;
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
 
@@ -466,9 +481,10 @@ void CodeGen::visit(VarExprAST &E) {
     ExprAST *Init = NamedVar.second.get();
 
     // ★ 변수를 scope에 넣기 "전에" 초기식을 계산
-    Value *InitVal = Init ? codegenExpr(*Init)
+    Value *InitVal = Init ? visit(*Init)
                           : ConstantFP::get(*Ctx, APFloat(0.0));
-    if (!InitVal) { Result = nullptr; return; }
+    if (!InitVal)
+      return nullptr;
 
     AllocaInst *Alloca = createEntryBlockAlloca(TheFunction, VarName);
     Builder->CreateStore(InitVal, Alloca);
@@ -477,14 +493,15 @@ void CodeGen::visit(VarExprAST &E) {
     NamedValues[VarName] = Alloca;
   }
 
-  Value *BodyVal = codegenExpr(E.getBody());
-  if (!BodyVal) { Result = nullptr; return; }
+  Value *BodyVal = visit(E.getBody());
+  if (!BodyVal)
+    return nullptr;
 
   unsigned Idx = 0;
   for (const auto &NamedVar : E.getVarNames())
     NamedValues[NamedVar.first] = OldBindings[Idx++];   // 복원
 
-  Result = BodyVal;
+  return BodyVal;
 }
 ```
 
@@ -630,7 +647,7 @@ Function *CodeGen::codegen(FunctionAST &F) {
   if (Dbg)
     Dbg->emitLocation(&F.getBody());
 
-  if (Value *RetVal = codegenExpr(F.getBody())) {
+  if (Value *RetVal = visit(F.getBody())) {
     Builder->CreateRet(RetVal);
     if (Dbg) Dbg->popScope();
 

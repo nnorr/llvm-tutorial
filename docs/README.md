@@ -25,9 +25,20 @@ C++에 익숙하지 않은 독자를 기준으로 썼습니다. 새로 나오는
 | [06. Backend & Driver](06-backend-and-driver.md) | `ObjectEmitter.{h,cpp}`, `main.cpp` | Ch8 — Compiling to Object Code |
 | [07. 최적화 패스](07-passes.md) | `CodeGen::initModule`, `ObjectEmitter` | Ch4 — Adding JIT and Optimizer Support |
 | [08. JIT 구조](08-jit.md) | `KaleidoscopeJIT.h`, `main.cpp` | Ch4, 별도 시리즈 *Building a JIT* |
+| [09. Visitor 설계 변천](09-visitor-evolution.md) | `ASTVisitor.h`, `AST.h` | — (이 저장소 고유) |
+| [10. 디버그 정보와 최적화](10-debuginfo-and-optimization.md) | `main.cpp`, `CodeGen.cpp` | — (이 저장소 고유) |
+
+한 페이지로 압축한 정리는 [SUMMARY.md](SUMMARY.md)에 있습니다 — 컴포넌트, 구현,
+설계 결정, CRTP까지 한 번에 훑는 용도입니다.
 
 01–06은 "코드가 무엇을 하는가", 07–08은 **LLVM 인프라를 어떻게 쓰는가**를
 다룹니다. 멘토가 지목한 *Function Pass* 와 *JIT 컴파일러 구조* 가 이 둘입니다.
+
+09와 10은 부록입니다. 09는 AST 순회 방식을 두 번 갈아엎은 기록 — 버린 설계가
+왜 그렇게 생겼고 무엇 때문에 버렸는지의 비교입니다. Expression Problem과
+MLIR의 dialect 확장성이 왜 다른 축의 문제인지도 여기서 다룹니다.
+10은 05와 07이 "`-g`면 최적화를 끈다" 한 줄로 넘어간 부분을 펼쳐서,
+그 제약이 어디서 오는지와 clang/gcc가 `-O2 -g`를 어떻게 지원하는지를 봅니다.
 
 ## 전체 흐름 한눈에
 
@@ -151,25 +162,30 @@ double getNumVal() const { return NumVal; }
 ```cpp
 class ExprAST {                          // 부모 (base class)
 public:
-  virtual void accept(ASTVisitor &V) = 0;   // = 0 : 순수 가상 함수
+  virtual ~ExprAST() = default;          // 가상 소멸자
+  ExprASTKind getKind() const { return Kind; }
 };
 
 class NumberExprAST : public ExprAST {   // 자식
+  double Val;
 public:
-  void accept(ASTVisitor &V) override { V.visit(*this); }
+  double getVal() const { return Val; }
 };
 ```
 
+- `class 자식 : public 부모` — 자식은 부모의 멤버를 물려받고, 부모 타입의
+  참조/포인터에 담을 수 있습니다. 그래서 `std::unique_ptr<ExprAST>` 하나로
+  9가지 노드를 모두 담습니다
 - `virtual` — "자식이 이 함수를 바꿔 정의할 수 있다"
 - `= 0` (순수 가상) — "부모는 구현이 없다. 자식이 반드시 구현해야 한다".
-  이런 함수가 하나라도 있으면 그 클래스는 **직접 객체를 만들 수 없습니다**
+  이런 함수가 하나라도 있으면 그 클래스는 직접 객체를 만들 수 없습니다
   (추상 클래스)
-- `override` — "부모의 가상 함수를 재정의하는 중"이라고 컴파일러에게 알림.
-  오타로 이름이 다르면 컴파일 에러가 나서 실수를 잡아줍니다
+- `override` — 부모의 가상 함수를 재정의하는 중이라고 컴파일러에게 알림
 
-핵심 효과: `ExprAST *E` 를 통해 `E->accept(V)` 를 부르면, `E`가 실제로 어떤
-자식 타입이냐에 따라 **알맞은 자식의 함수가 자동으로 불립니다.** 이것을
-동적 디스패치(dynamic dispatch)라고 하고, AST와 Visitor의 동작 원리입니다.
+**이 저장소에서 `virtual`은 소멸자에만 쓰입니다.** 이유는 아래 "소멸자"
+항목에 있고, 노드 종류에 따라 다르게 처리하는 일은 가상 함수가 아니라
+`getKind()` 스위치로 합니다 ([02. AST](02-ast.md) 4절). 왜 그 선택을
+했는지는 [09. Visitor 설계 변천](09-visitor-evolution.md)에서 다룹니다.
 
 ### 소멸자
 

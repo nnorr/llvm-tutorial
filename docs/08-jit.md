@@ -344,7 +344,7 @@ REPL에서 `1+2;`, `3*4;` … 를 계속 입력하면 매번 `__anon_expr` 함�
 
 **반대로 함수 정의는 남아 있어야 합니다.** 나중에 호출해야 하니까요.
 이 구분을 틀려서 실제로 버그를 냈습니다 —
-[06-backend-and-driver](06-backend-and-driver.md) 3.4절에 증상까지 기록해 뒀습니다.
+[06-backend-and-driver](06-backend-and-driver.md) 3.5절에 증상까지 기록해 뒀습니다.
 
 `ResourceTrackerSP`의 `SP`는 **shared pointer**입니다. `unique_ptr`과 달리
 여러 곳이 함께 소유할 수 있고, 마지막 소유자가 사라질 때 해제됩니다.
