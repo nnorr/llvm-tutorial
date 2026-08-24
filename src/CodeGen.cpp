@@ -255,7 +255,7 @@ Value *CodeGen::visitIf(IfExprAST &E) {
 ///   br endcond, loop, endloop
 /// outloop:
 ///
-/// NOTE: this is a do-while -- the body always runs at least once, and the end
+/// this is a do-while -- the body always runs at least once, and the end
 /// condition is evaluated *before* the induction variable is incremented.
 Value *CodeGen::visitFor(ForExprAST &E) {
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
@@ -266,7 +266,6 @@ Value *CodeGen::visitFor(ForExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  // Emit the start code first, without 'variable' in scope.
   Value *StartVal = visit(E.getStart());
   if (!StartVal)
     return nullptr;
