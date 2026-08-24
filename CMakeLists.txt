@@ -84,3 +84,36 @@ add_test(NAME jit_operators
     -DEXPECT=30
     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/RunJit.cmake
 )
+
+# IR-level tests: lit walks test/ and runs each .ks file's RUN: line, and
+# FileCheck matches the emitted IR against the CHECK: lines in the same file.
+# This is the llvm/test idiom; add a test by dropping in a file, no rebuild.
+#
+# Both tools are optional -- the suite is skipped if they are not installed.
+# conda-forge keeps FileCheck in libexec/llvm rather than bin.
+find_program(LIT_BINARY NAMES lit llvm-lit)
+find_program(FILECHECK_BINARY
+  NAMES FileCheck
+  HINTS ${LLVM_TOOLS_BINARY_DIR} ${LLVM_TOOLS_BINARY_DIR}/../libexec/llvm
+)
+
+if(LIT_BINARY AND FILECHECK_BINARY)
+  set(TOY_BINARY $<TARGET_FILE:toy>)
+  # Two steps: configure_file expands @VARS@ but not generator expressions,
+  # file(GENERATE) does the reverse. $<TARGET_FILE:toy> needs the second.
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/lit.site.cfg.py.in
+    ${CMAKE_CURRENT_BINARY_DIR}/test/lit.site.cfg.py.tmp
+    @ONLY
+  )
+  file(GENERATE
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/test/lit.site.cfg.py
+    INPUT  ${CMAKE_CURRENT_BINARY_DIR}/test/lit.site.cfg.py.tmp
+  )
+  add_test(NAME lit
+    COMMAND ${LIT_BINARY} -sv ${CMAKE_CURRENT_BINARY_DIR}/test
+  )
+  message(STATUS "IR tests enabled: ${LIT_BINARY} + ${FILECHECK_BINARY}")
+else()
+  message(STATUS "IR tests disabled (need lit and FileCheck)")
+endif()

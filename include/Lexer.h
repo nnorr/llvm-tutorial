@@ -8,12 +8,6 @@
 
 namespace kaleidoscope {
 
-/// The lexer returns tokens [0-255] if it is an unknown character, otherwise
-/// one of these for known things.
-///
-/// A plain enum, not an enum class: gettok() returns int, negative for these
-/// tokens and positive for a literal character, and the parser switches over
-/// both in one statement.
 enum Token {
   tok_eof = -1,
 
@@ -43,34 +37,32 @@ enum Token {
 /// Human-readable name for a token, for diagnostics.
 std::string getTokName(int Tok);
 
-/// Lexer - Turns a character stream into tokens, tracking line/column so the
-/// parser can stamp AST nodes with source locations for debug info.
-///
-/// Takes an istream so tests can drive it from a std::istringstream.
 class Lexer {
   std::istream &In;
   int LastChar = ' ';
 
-  /// LexLoc is where the lexer currently is; CurLoc is the start of the token
-  /// most recently returned by gettok().
   SourceLocation LexLoc{1, 0};
   SourceLocation CurLoc;
 
   std::string IdentifierStr; // Filled in if tok_identifier
   double NumVal = 0.0;       // Filled in if tok_number
+  bool HadError = false;
 
-  /// Reads one character, maintaining LexLoc.
   int advance();
 
 public:
   explicit Lexer(std::istream &In) : In(In) {}
 
-  /// Returns the next token from the stream.
   int gettok();
 
   const std::string &getIdentifierStr() const { return IdentifierStr; }
   double getNumVal() const { return NumVal; }
   SourceLocation getCurLoc() const { return CurLoc; }
+
+  /// True if any token was rejected. A bad token still yields a usable value
+  /// so lexing can continue, so the driver has to ask before trusting the
+  /// result; the REPL ignores it and keeps going.
+  bool hadError() const { return HadError; }
 };
 
 } // namespace kaleidoscope

@@ -1,0 +1,6 @@
+# Generated from lit.site.cfg.py.in by CMake -- do not edit.
+config.kaleidoscope_obj_root = "@CMAKE_CURRENT_BINARY_DIR@"
+config.toy_binary = "@TOY_BINARY@"
+config.filecheck_binary = "@FILECHECK_BINARY@"
+
+lit_config.load_config(config, "@CMAKE_CURRENT_SOURCE_DIR@/test/lit.cfg.py")

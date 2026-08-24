@@ -102,12 +102,12 @@ int Lexer::gettok() {
       fprintf(stderr, "Error: invalid number literal '%s' at %d:%d\n",
               NumStr.c_str(), CurLoc.Line, CurLoc.Col);
       NumVal = 0.0;
+      HadError = true;
     }
     return tok_number;
   }
 
   if (LastChar == '#') {
-    // Comment until end of line.
     do
       LastChar = advance();
     while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
@@ -116,11 +116,9 @@ int Lexer::gettok() {
       return gettok();
   }
 
-  // Check for end of file.  Don't eat the EOF.
   if (LastChar == EOF)
     return tok_eof;
 
-  // Otherwise, just return the character as its ascii value.
   int ThisChar = LastChar;
   LastChar = advance();
   return ThisChar;

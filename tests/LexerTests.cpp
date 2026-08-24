@@ -121,6 +121,13 @@ void testNumbers() {
   CHECK_EQ(DotLex.gettok(), tok_number);
   CHECK_EQ(DotLex.getNumVal(), 0.0);
 
+  // The rejected token still lexes to 0.0 so the parse can continue, so the
+  // failure is only visible through hadError(). Without it the compile driver
+  // would emit an object for a program it had already complained about.
+  CHECK(BadLex.hadError());
+  CHECK(DotLex.hadError());
+  CHECK(!Lex.hadError());
+
   // A number is still terminated correctly by a following token.
   auto Toks = tokenize("1.5+2");
   CHECK_EQ(Toks.size(), size_t(3));

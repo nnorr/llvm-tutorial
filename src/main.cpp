@@ -48,12 +48,12 @@ extern "C" DLLEXPORT double printd(double X) {
 namespace {
 
 struct Options {
-  bool Compile = false;      // -c: compile a file instead of running the REPL
-  bool Debug = false;        // -g: emit DWARF debug info (implies -c)
-  bool DumpAST = false;      // --dump-ast: print the parse tree
-  bool EmitLLVM = false;     // --emit-llvm: print the module's IR (-c only;
-                             // the REPL always prints it at EOF)
-  std::string Input;         // source file for -c
+  bool Compile = false;  // -c: compile a file instead of running the REPL
+  bool Debug = false;    // -g: emit DWARF debug info (implies -c)
+  bool DumpAST = false;  // --dump-ast: print the parse tree
+  bool EmitLLVM = false; // --emit-llvm: print the module's IR (-c only;
+                         // the REPL always prints it at EOF)
+  std::string Input;     // source file for -c
   std::string Output = "output.o";
 };
 
@@ -130,9 +130,6 @@ int runInteractive(const Options &O) {
 
           captureModuleIR(CG, AllIR);
 
-          // Its own module, and no ResourceTracker, so the definition
-          // persists. Left in the working module it would be swept away with
-          // the next top-level expression, whose module is tracked.
           auto TSM = orc::ThreadSafeModule(CG.takeModule(), CG.takeContext());
           ExitOnErr(TheJIT->addModule(std::move(TSM)));
           CG.initModule("KaleidoscopeJIT", TheJIT->getDataLayout(),
@@ -165,13 +162,10 @@ int runInteractive(const Options &O) {
         if (CG.codegen(*FnAST)) {
           captureModuleIR(CG, AllIR);
 
-          // Track the JIT'd memory for this anonymous expression so it can be
-          // freed once evaluated.
           auto RT = TheJIT->getMainJITDylib().createResourceTracker();
           auto TSM = orc::ThreadSafeModule(CG.takeModule(), CG.takeContext());
           ExitOnErr(TheJIT->addModule(std::move(TSM), RT));
 
-          // The module was handed away -- open a fresh one before continuing.
           CG.initModule("KaleidoscopeJIT", TheJIT->getDataLayout(),
                         /*Optimize=*/true);
 
@@ -187,7 +181,6 @@ int runInteractive(const Options &O) {
       break;
     }
 
-    // One prompt per construct handled; ';' skipped it with `continue` above.
     fprintf(stderr, "ready> ");
   }
 }
@@ -215,8 +208,6 @@ int runCompile(const Options &O) {
   OperatorTable Ops;
   Lexer Lex(In);
   CodeGen CG(Ops);
-  // -g disables the passes: mem2reg would remove the allocas that
-  // dbg.declare points at. See docs/10-debuginfo-and-optimization.md.
   CG.initModule(O.Input, TM->createDataLayout(), /*Optimize=*/!O.Debug);
 
   std::unique_ptr<DIBuilder> DBuilder;
@@ -296,10 +287,14 @@ int runCompile(const Options &O) {
     SawTopLevel = true;
   }
 
+  // A rejected token still lexes to a usable value, so the parse can succeed
+  // on input the lexer already complained about. Ask before writing a .o.
+  if (Lex.hadError())
+    Failed = true;
+
   if (O.Debug)
     DBuilder->finalize();
 
-  // After finalize(), so the printed IR carries complete debug metadata.
   if (O.EmitLLVM)
     emitModuleIR(CG);
 
