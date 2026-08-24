@@ -10,10 +10,9 @@
 namespace kaleidoscope {
 
 /// Parser - Recursive-descent parser with precedence climbing for binary
-/// operators. Builds the AST; it is the only thing that constructs AST nodes.
+/// operators. The only thing that constructs AST nodes.
 ///
-/// CurTok is one-token lookahead and lives here rather than in the Lexer: the
-/// Lexer stays a pure token source, buffering is a parsing concern.
+/// CurTok is one-token lookahead, held here rather than in the Lexer.
 class Parser {
   Lexer &Lex;
   OperatorTable &Ops;
@@ -55,11 +54,8 @@ public:
   std::unique_ptr<PrototypeAST> parseExtern();
   /// toplevelexpr ::= expression
   ///
-  /// The synthesized wrapper is named \p Name. The JIT driver uses the default
-  /// "__anon_expr" and looks it up to evaluate; the object-file driver passes
-  /// "main" so the emitted .o has a real entry point. That difference is why
-  /// Ch8/Ch9 could only accept one top-level expression -- a second would
-  /// redefine main.
+  /// Wrapped in a function named \p Name: "__anon_expr" for the JIT, which
+  /// looks it up to evaluate, or "main" for the object-file driver.
   std::unique_ptr<FunctionAST>
   parseTopLevelExpr(const std::string &Name = "__anon_expr");
 };

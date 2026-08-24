@@ -1,44 +1,51 @@
 #ifndef KALEIDOSCOPE_ASTVISITOR_H
 #define KALEIDOSCOPE_ASTVISITOR_H
 
+#include "AST.h"
+
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+
 namespace kaleidoscope {
 
-class NumberExprAST;
-class VariableExprAST;
-class UnaryExprAST;
-class BinaryExprAST;
-class AssignExprAST;
-class CallExprAST;
-class IfExprAST;
-class ForExprAST;
-class VarExprAST;
+/// ASTVisitor - Dispatches an ExprAST to a per-node hook on Derived.
+///
+/// CRTP plus a switch over the Kind discriminator, the shape Clang uses in
+/// clang/AST/StmtVisitor.h. Dispatch is not virtual, so RetTy is free to vary
+/// per visitor: CodeGen returns llvm::Value*, ASTDumper returns void.
+///
+/// Closed-world: a new node kind means editing the switch and every visitor.
+/// docs/09-visitor-evolution.md covers the two designs this replaced.
+///
+/// Derived declares its hooks private and befriends this class.
+template <typename Derived, typename RetTy = void> class ASTVisitor {
+  Derived &derived() { return *static_cast<Derived *>(this); }
 
-/// ASTVisitor - Double-dispatch interface over the expression nodes.
-///
-/// The tutorial hangs a virtual codegen() directly off each AST node, which is
-/// why its IRBuilder and symbol tables had to be globals: the nodes had no way
-/// to receive backend state. Here the nodes stay pure data and each consumer
-/// (CodeGen, ASTDumper, ...) is a visitor carrying its own state.
-///
-/// Note there is no visit() for PrototypeAST or FunctionAST -- neither derives
-/// from ExprAST, and consumers handle them through dedicated entry points.
-///
-/// Visitors that produce a value (CodeGen produces llvm::Value*) stash it in a
-/// member and expose a typed wrapper, since visit() cannot return a type the
-/// AST is allowed to know about.
-class ASTVisitor {
 public:
-  virtual ~ASTVisitor() = default;
-
-  virtual void visit(NumberExprAST &E) = 0;
-  virtual void visit(VariableExprAST &E) = 0;
-  virtual void visit(UnaryExprAST &E) = 0;
-  virtual void visit(BinaryExprAST &E) = 0;
-  virtual void visit(AssignExprAST &E) = 0;
-  virtual void visit(CallExprAST &E) = 0;
-  virtual void visit(IfExprAST &E) = 0;
-  virtual void visit(ForExprAST &E) = 0;
-  virtual void visit(VarExprAST &E) = 0;
+  RetTy visit(ExprAST &E) {
+    switch (E.getKind()) {
+    case ExprAST::Expr_Number:
+      return derived().visitNumber(llvm::cast<NumberExprAST>(E));
+    case ExprAST::Expr_Variable:
+      return derived().visitVariable(llvm::cast<VariableExprAST>(E));
+    case ExprAST::Expr_Unary:
+      return derived().visitUnary(llvm::cast<UnaryExprAST>(E));
+    case ExprAST::Expr_Binary:
+      return derived().visitBinary(llvm::cast<BinaryExprAST>(E));
+    case ExprAST::Expr_Assign:
+      return derived().visitAssign(llvm::cast<AssignExprAST>(E));
+    case ExprAST::Expr_Call:
+      return derived().visitCall(llvm::cast<CallExprAST>(E));
+    case ExprAST::Expr_If:
+      return derived().visitIf(llvm::cast<IfExprAST>(E));
+    case ExprAST::Expr_For:
+      return derived().visitFor(llvm::cast<ForExprAST>(E));
+    case ExprAST::Expr_Var:
+      return derived().visitVar(llvm::cast<VarExprAST>(E));
+    }
+    // No default: a new ExprASTKind makes -Wswitch fire here.
+    llvm_unreachable("unknown ExprASTKind");
+  }
 };
 
 } // namespace kaleidoscope

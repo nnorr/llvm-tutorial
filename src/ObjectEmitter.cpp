@@ -12,10 +12,8 @@ using namespace llvm;
 namespace kaleidoscope {
 
 void ObjectEmitter::initializeTargets() {
-  // The tutorial calls InitializeAll*() here, which forces every backend
-  // (AArch64, AMDGPU, RISCV, ...) to be linked in. We only ever emit for the
-  // host triple, so the native initializers are enough -- and they keep the
-  // link line to the `native` component instead of `all`.
+  // Host triple only, so the native initializers suffice. InitializeAll*()
+  // would drag every backend into the link.
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
@@ -49,8 +47,7 @@ bool ObjectEmitter::emit(Module &Mod, TargetMachine &TM,
     return false;
   }
 
-  // Object emission still uses the legacy pass manager -- the new pass manager
-  // does not cover the target codegen pipeline.
+  // The new pass manager does not cover the target codegen pipeline.
   legacy::PassManager Pass;
   if (TM.addPassesToEmitFile(Pass, Dest, nullptr, CodeGenFileType::ObjectFile)) {
     Error = "TargetMachine can't emit a file of this type";

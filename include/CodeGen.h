@@ -20,21 +20,18 @@
 
 namespace kaleidoscope {
 
-/// CodeGen - Lowers the AST to LLVM IR.
+/// CodeGen - Lowers the AST to LLVM IR. An ASTVisitor with RetTy = Value*.
 ///
-/// Implemented as an ASTVisitor rather than as codegen() methods on the nodes.
-/// visit() cannot return llvm::Value* without the AST knowing about LLVM, so
-/// the produced value is stashed in Result and read back by codegenExpr().
-///
-/// Module lifecycle: the JIT driver calls initModule() before every top-level
-/// expression, hands the finished module to the JIT, and re-initializes. The
-/// object-file driver calls it once and accumulates everything into a single
-/// module. Hence this is NOT a construct-once object.
-class CodeGen : public ASTVisitor {
+/// Not a construct-once object. The JIT driver calls initModule() before every
+/// top-level expression and hands the finished module away; the object-file
+/// driver calls it once and accumulates everything into a single module.
+class CodeGen : public ASTVisitor<CodeGen, llvm::Value *> {
+  friend class ASTVisitor<CodeGen, llvm::Value *>; // calls the hooks below
+
   OperatorTable &Ops;
 
-  /// Null unless debug info is being emitted. The JIT path leaves it null:
-  /// DWARF describes a file on disk, which a REPL does not have.
+  /// Null unless -g. The JIT path leaves it null: DWARF describes a file on
+  /// disk, which a REPL does not have.
   DebugInfo *Dbg = nullptr;
 
   std::unique_ptr<llvm::LLVMContext> Ctx;
@@ -51,32 +48,28 @@ class CodeGen : public ASTVisitor {
   std::unique_ptr<llvm::PassInstrumentationCallbacks> PIC;
   std::unique_ptr<llvm::StandardInstrumentations> SI;
 
-  /// Variables in scope, as stack slots. mem2reg (PromotePass) turns these
-  /// into SSA registers, which is why codegen never builds PHI nodes by hand
-  /// for mutable variables.
+  /// Variables in scope, as stack slots. mem2reg promotes them to SSA
+  /// registers, so codegen never builds PHI nodes for mutable variables.
   std::map<std::string, llvm::AllocaInst *> NamedValues;
 
-  /// Prototypes seen so far, so a function can be re-declared into a fresh
-  /// module after the previous one was handed to the JIT.
+  /// Prototypes seen so far, for re-declaring into a fresh module.
   std::map<std::string, std::unique_ptr<PrototypeAST>> FunctionProtos;
 
-  /// Set by the visit() methods, read by codegenExpr().
-  llvm::Value *Result = nullptr;
-
-  llvm::Value *codegenExpr(ExprAST &E);
   llvm::Function *getFunction(const std::string &Name);
   llvm::AllocaInst *createEntryBlockAlloca(llvm::Function *F,
                                            llvm::StringRef VarName);
 
-  void visit(NumberExprAST &E) override;
-  void visit(VariableExprAST &E) override;
-  void visit(UnaryExprAST &E) override;
-  void visit(BinaryExprAST &E) override;
-  void visit(AssignExprAST &E) override;
-  void visit(CallExprAST &E) override;
-  void visit(IfExprAST &E) override;
-  void visit(ForExprAST &E) override;
-  void visit(VarExprAST &E) override;
+  /// Per-node hooks, reached through the inherited visit(ExprAST &). Each
+  /// returns null on error, having already reported it.
+  llvm::Value *visitNumber(NumberExprAST &E);
+  llvm::Value *visitVariable(VariableExprAST &E);
+  llvm::Value *visitUnary(UnaryExprAST &E);
+  llvm::Value *visitBinary(BinaryExprAST &E);
+  llvm::Value *visitAssign(AssignExprAST &E);
+  llvm::Value *visitCall(CallExprAST &E);
+  llvm::Value *visitIf(IfExprAST &E);
+  llvm::Value *visitFor(ForExprAST &E);
+  llvm::Value *visitVar(VarExprAST &E);
 
 public:
   explicit CodeGen(OperatorTable &Ops) : Ops(Ops) {}

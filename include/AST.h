@@ -1,7 +1,6 @@
 #ifndef KALEIDOSCOPE_AST_H
 #define KALEIDOSCOPE_AST_H
 
-#include "ASTVisitor.h"
 #include "SourceLocation.h"
 
 #include "llvm/Support/Casting.h"
@@ -12,24 +11,15 @@
 #include <utility>
 #include <vector>
 
-/// The AST carries no LLVM *IR* dependency -- no Value*, no IRBuilder, no
-/// codegen(). Its one LLVM include is llvm/Support/Casting.h, a header-only
-/// utility that provides isa<>/dyn_cast<>/cast<> on top of the hand-rolled
-/// Kind discriminator below. This is the idiomatic LLVM alternative to C++
-/// RTTI (LLVM is normally built -fno-rtti), and it is the same shape MLIR's
-/// own Toy tutorial uses for its AST.
-///
-/// Unlike the tutorial, these classes are NOT in an anonymous namespace. There
-/// they were confined to one translation unit; in a header an anonymous
-/// namespace would give every .cpp its own distinct set of types, so
-/// unique_ptr<ExprAST> in Parser.h would not be the same type as in main.cpp.
+/// Nodes are passive data: no codegen(), no accept(), no LLVM IR types.
+/// llvm/Support/Casting.h is header-only and provides isa<>/dyn_cast<> over the
+/// Kind discriminator below, LLVM's usual stand-in for RTTI.
 namespace kaleidoscope {
 
 /// ExprAST - Base class for all expression nodes.
 class ExprAST {
 public:
-  /// Discriminator for LLVM-style RTTI. Every concrete subclass gets a tag and
-  /// a matching classof(), which is all isa<>/dyn_cast<> need.
+  /// Discriminator for LLVM-style RTTI. Each subclass has a tag and a classof().
   enum ExprASTKind {
     Expr_Number,
     Expr_Variable,
@@ -47,14 +37,10 @@ private:
   SourceLocation Loc;
 
 public:
-  /// The tutorial defaults the location to the lexer's CurLoc global, which
-  /// makes the AST depend upward on the Lexer. Here the parser must pass it.
   ExprAST(ExprASTKind Kind, SourceLocation Loc) : Kind(Kind), Loc(Loc) {}
   virtual ~ExprAST() = default;
 
   ExprASTKind getKind() const { return Kind; }
-
-  virtual void accept(ASTVisitor &V) = 0;
 
   int getLine() const { return Loc.Line; }
   int getCol() const { return Loc.Col; }
@@ -67,8 +53,6 @@ class NumberExprAST : public ExprAST {
 public:
   NumberExprAST(SourceLocation Loc, double Val)
       : ExprAST(Expr_Number, Loc), Val(Val) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   double getVal() const { return Val; }
 
   static bool classof(const ExprAST *E) { return E->getKind() == Expr_Number; }
@@ -81,8 +65,6 @@ class VariableExprAST : public ExprAST {
 public:
   VariableExprAST(SourceLocation Loc, std::string Name)
       : ExprAST(Expr_Variable, Loc), Name(std::move(Name)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   const std::string &getName() const { return Name; }
 
   static bool classof(const ExprAST *E) {
@@ -99,8 +81,6 @@ public:
   UnaryExprAST(SourceLocation Loc, char Opcode,
                std::unique_ptr<ExprAST> Operand)
       : ExprAST(Expr_Unary, Loc), Opcode(Opcode), Operand(std::move(Operand)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   char getOpcode() const { return Opcode; }
   ExprAST &getOperand() const { return *Operand; }
 
@@ -119,8 +99,6 @@ public:
                 std::unique_ptr<ExprAST> RHS)
       : ExprAST(Expr_Binary, Loc), Op(Op), LHS(std::move(LHS)),
         RHS(std::move(RHS)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   char getOp() const { return Op; }
   ExprAST &getLHS() const { return *LHS; }
   ExprAST &getRHS() const { return *RHS; }
@@ -130,12 +108,8 @@ public:
 
 /// AssignExprAST - Expression class for 'name = expr'.
 ///
-/// The tutorial routes assignment through BinaryExprAST and then, in codegen,
-/// casts the LHS to VariableExprAST to recover the name. But "the LHS of '='
-/// must be an identifier" is a *syntactic* rule, so the parser can enforce it
-/// and store the name directly. Codegen then needs no cast and no failure
-/// path, and the invalid state (an assignment whose LHS is not a variable) is
-/// unrepresentable rather than merely rejected later.
+/// Separate from BinaryExprAST: "the LHS of '=' is an identifier" is a
+/// syntactic rule, so the parser enforces it and stores the name directly.
 class AssignExprAST : public ExprAST {
   std::string Name;
   std::unique_ptr<ExprAST> Value;
@@ -145,8 +119,6 @@ public:
                 std::unique_ptr<ExprAST> Value)
       : ExprAST(Expr_Assign, Loc), Name(std::move(Name)),
         Value(std::move(Value)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   const std::string &getName() const { return Name; }
   ExprAST &getValue() const { return *Value; }
 
@@ -163,8 +135,6 @@ public:
               std::vector<std::unique_ptr<ExprAST>> Args)
       : ExprAST(Expr_Call, Loc), Callee(std::move(Callee)),
         Args(std::move(Args)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   const std::string &getCallee() const { return Callee; }
   const std::vector<std::unique_ptr<ExprAST>> &getArgs() const { return Args; }
 
@@ -180,8 +150,6 @@ public:
             std::unique_ptr<ExprAST> Then, std::unique_ptr<ExprAST> Else)
       : ExprAST(Expr_If, Loc), Cond(std::move(Cond)), Then(std::move(Then)),
         Else(std::move(Else)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   ExprAST &getCond() const { return *Cond; }
   ExprAST &getThen() const { return *Then; }
   ExprAST &getElse() const { return *Else; }
@@ -201,8 +169,6 @@ public:
       : ExprAST(Expr_For, Loc), VarName(std::move(VarName)),
         Start(std::move(Start)), End(std::move(End)), Step(std::move(Step)),
         Body(std::move(Body)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   const std::string &getVarName() const { return VarName; }
   ExprAST &getStart() const { return *Start; }
   ExprAST &getEnd() const { return *End; }
@@ -225,8 +191,6 @@ public:
       std::unique_ptr<ExprAST> Body)
       : ExprAST(Expr_Var, Loc), VarNames(std::move(VarNames)),
         Body(std::move(Body)) {}
-  void accept(ASTVisitor &V) override { V.visit(*this); }
-
   /// Each entry is (name, initializer); the initializer may be null, meaning
   /// the variable is initialized to 0.0.
   const std::vector<std::pair<std::string, std::unique_ptr<ExprAST>>> &
@@ -285,9 +249,8 @@ public:
   PrototypeAST &getProto() const { return *Proto; }
   ExprAST &getBody() const { return *Body; }
 
-  /// CodeGen takes ownership of the prototype so it can be re-declared into a
-  /// later module. After this the node no longer owns it -- use the reference
-  /// returned by getProto() before calling this.
+  /// Hands the prototype to CodeGen, which re-declares it into later modules.
+  /// The node no longer owns it afterwards; read getProto() first.
   std::unique_ptr<PrototypeAST> takeProto() { return std::move(Proto); }
 };
 

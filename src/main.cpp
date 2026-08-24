@@ -51,6 +51,8 @@ struct Options {
   bool Compile = false;      // -c: compile a file instead of running the REPL
   bool Debug = false;        // -g: emit DWARF debug info (implies -c)
   bool DumpAST = false;      // --dump-ast: print the parse tree
+  bool EmitLLVM = false;     // --emit-llvm: print the module's IR (-c only;
+                             // the REPL always prints it at EOF)
   std::string Input;         // source file for -c
   std::string Output = "output.o";
 };
@@ -61,7 +63,21 @@ void usage(const char *Prog) {
          << "  -c <file.ks>   compile to a native object file\n"
          << "  -g             emit debug info (disables optimization)\n"
          << "  -o <file.o>    output object name (default output.o)\n"
-         << "  --dump-ast     print the AST for each construct\n";
+         << "  --dump-ast     print the AST for each construct\n"
+         << "  --emit-llvm    with -c, also print the module's IR\n"
+         << "                 (the REPL always prints it at EOF)\n";
+}
+
+/// Prints a whole module.
+void emitModuleIR(CodeGen &CG) { CG.getModule().print(errs(), nullptr); }
+
+/// Appends a module's IR to a buffer. Each module is handed to the JIT and a
+/// fresh one opened, so nothing survives to EOF unless captured here.
+void captureModuleIR(CodeGen &CG, std::string &Out) {
+  if (CG.getModule().empty())
+    return;
+  raw_string_ostream OS(Out);
+  CG.getModule().print(OS, nullptr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -85,14 +101,23 @@ int runInteractive(const Options &O) {
   fprintf(stderr, "ready> ");
   Parser P(Lex, Ops); // primes the first token
 
+  // IR of every module, shown together at EOF.
+  std::string AllIR;
+
   while (true) {
     switch (P.getCurTok()) {
     case tok_eof:
+      // The working module was never handed off; it holds anything written
+      // since the last definition, externs included.
+      captureModuleIR(CG, AllIR);
+      if (!AllIR.empty())
+        errs() << "\n" << AllIR;
       return 0;
 
-    case ';': // ignore top-level semicolons.
+    case ';':
+      // Ignore top-level semicolons, and print no prompt for them.
       P.advance();
-      break;
+      continue;
 
     case tok_def:
       if (auto FnAST = P.parseDefinition()) {
@@ -103,11 +128,11 @@ int runInteractive(const Options &O) {
           FnIR->print(errs());
           fprintf(stderr, "\n");
 
-          // Hand the definition to the JIT right away, in its own module and
-          // with NO ResourceTracker so it persists. If it were left in the
-          // working module it would be swept away with the next top-level
-          // expression, whose module *is* tracked and removed after
-          // evaluation -- and later calls would fail to resolve the symbol.
+          captureModuleIR(CG, AllIR);
+
+          // Its own module, and no ResourceTracker, so the definition
+          // persists. Left in the working module it would be swept away with
+          // the next top-level expression, whose module is tracked.
           auto TSM = orc::ThreadSafeModule(CG.takeModule(), CG.takeContext());
           ExitOnErr(TheJIT->addModule(std::move(TSM)));
           CG.initModule("KaleidoscopeJIT", TheJIT->getDataLayout(),
@@ -116,7 +141,6 @@ int runInteractive(const Options &O) {
       } else {
         P.advance(); // error recovery
       }
-      fprintf(stderr, "ready> ");
       break;
 
     case tok_extern:
@@ -132,7 +156,6 @@ int runInteractive(const Options &O) {
       } else {
         P.advance();
       }
-      fprintf(stderr, "ready> ");
       break;
 
     default:
@@ -140,6 +163,8 @@ int runInteractive(const Options &O) {
         if (O.DumpAST)
           Dumper.dump(*FnAST);
         if (CG.codegen(*FnAST)) {
+          captureModuleIR(CG, AllIR);
+
           // Track the JIT'd memory for this anonymous expression so it can be
           // freed once evaluated.
           auto RT = TheJIT->getMainJITDylib().createResourceTracker();
@@ -159,9 +184,11 @@ int runInteractive(const Options &O) {
       } else {
         P.advance();
       }
-      fprintf(stderr, "ready> ");
       break;
     }
+
+    // One prompt per construct handled; ';' skipped it with `continue` above.
+    fprintf(stderr, "ready> ");
   }
 }
 
@@ -188,8 +215,8 @@ int runCompile(const Options &O) {
   OperatorTable Ops;
   Lexer Lex(In);
   CodeGen CG(Ops);
-  // Optimization is disabled with -g: the Ch9 pipeline emits no passes, and
-  // optimized code makes the line tables much harder to follow in a debugger.
+  // -g disables the passes: mem2reg would remove the allocas that
+  // dbg.declare points at. See docs/10-debuginfo-and-optimization.md.
   CG.initModule(O.Input, TM->createDataLayout(), /*Optimize=*/!O.Debug);
 
   std::unique_ptr<DIBuilder> DBuilder;
@@ -249,8 +276,7 @@ int runCompile(const Options &O) {
       continue;
     }
 
-    // A top-level expression becomes main(), so there can only be one. This is
-    // the same restriction the tutorial notes in Chapter 8.
+    // A top-level expression becomes main(), so there can only be one.
     if (SawTopLevel) {
       errs() << "only one top-level expression is supported when compiling "
                 "(it becomes main)\n";
@@ -272,6 +298,10 @@ int runCompile(const Options &O) {
 
   if (O.Debug)
     DBuilder->finalize();
+
+  // After finalize(), so the printed IR carries complete debug metadata.
+  if (O.EmitLLVM)
+    emitModuleIR(CG);
 
   if (Failed)
     return 1;
@@ -299,6 +329,8 @@ int main(int argc, char **argv) {
       O.Output = argv[++I];
     } else if (Arg == "--dump-ast") {
       O.DumpAST = true;
+    } else if (Arg == "--emit-llvm") {
+      O.EmitLLVM = true;
     } else if (Arg == "-g") {
       O.Debug = true;
     } else if (Arg == "-h" || Arg == "--help") {

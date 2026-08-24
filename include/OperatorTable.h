@@ -8,12 +8,9 @@ namespace kaleidoscope {
 
 /// OperatorTable - Precedence for binary operators.
 ///
-/// This is shared state, not owned by either the Parser or CodeGen. The Parser
-/// reads it to drive ParseBinOpRHS; CodeGen *writes* it, because a user-defined
-/// operator ("def binary | 5 (LHS RHS) ...") only becomes available once its
-/// definition has been code-generated. In the single-file tutorial both sides
-/// simply touched the `BinopPrecedence` global; pulling it out here breaks what
-/// would otherwise be a Parser <-> CodeGen dependency cycle.
+/// Shared by the Parser, which reads it, and CodeGen, which writes it when a
+/// "def binary | 5 (LHS RHS) ..." is generated. Owned by neither, so the two
+/// do not depend on each other.
 class OperatorTable {
   std::map<char, int> Precedence;
 

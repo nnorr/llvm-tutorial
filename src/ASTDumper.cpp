@@ -13,11 +13,11 @@ void ASTDumper::child(const char *Caption, ExprAST &E) {
   ++Indent;
   Out << std::string(Indent * 2, ' ') << Caption << '\n';
   ++Indent;
-  E.accept(*this);
+  visit(E);
   Indent -= 2;
 }
 
-void ASTDumper::dump(ExprAST &E) { E.accept(*this); }
+void ASTDumper::dump(ExprAST &E) { visit(E); }
 
 void ASTDumper::dump(PrototypeAST &P) {
   Out << std::string(Indent * 2, ' ') << "Prototype " << P.getName() << " (";
@@ -43,54 +43,54 @@ void ASTDumper::dump(FunctionAST &F) {
   dump(F.getProto());
   Out << std::string(Indent * 2, ' ') << "Body:\n";
   ++Indent;
-  F.getBody().accept(*this);
+  visit(F.getBody());
   Indent -= 2;
 }
 
-void ASTDumper::visit(NumberExprAST &E) {
+void ASTDumper::visitNumber(NumberExprAST &E) {
   line("Number ") << E.getVal() << " @" << E.getLine() << ':' << E.getCol()
                      << '\n';
 }
 
-void ASTDumper::visit(VariableExprAST &E) {
+void ASTDumper::visitVariable(VariableExprAST &E) {
   line("Variable ") << E.getName() << " @" << E.getLine() << ':'
                        << E.getCol() << '\n';
 }
 
-void ASTDumper::visit(UnaryExprAST &E) {
+void ASTDumper::visitUnary(UnaryExprAST &E) {
   line("Unary ") << '\'' << E.getOpcode() << "' @" << E.getLine() << ':'
                     << E.getCol() << '\n';
   child("Operand:", E.getOperand());
 }
 
-void ASTDumper::visit(BinaryExprAST &E) {
+void ASTDumper::visitBinary(BinaryExprAST &E) {
   line("Binary ") << '\'' << E.getOp() << "' @" << E.getLine() << ':'
                      << E.getCol() << '\n';
   child("LHS:", E.getLHS());
   child("RHS:", E.getRHS());
 }
 
-void ASTDumper::visit(AssignExprAST &E) {
+void ASTDumper::visitAssign(AssignExprAST &E) {
   line("Assign ") << E.getName() << " @" << E.getLine() << ':' << E.getCol()
                      << '\n';
   child("Value:", E.getValue());
 }
 
-void ASTDumper::visit(CallExprAST &E) {
+void ASTDumper::visitCall(CallExprAST &E) {
   line("Call ") << E.getCallee() << " @" << E.getLine() << ':' << E.getCol()
                    << '\n';
   for (const auto &Arg : E.getArgs())
     child("Arg:", *Arg);
 }
 
-void ASTDumper::visit(IfExprAST &E) {
+void ASTDumper::visitIf(IfExprAST &E) {
   line("If") << " @" << E.getLine() << ':' << E.getCol() << '\n';
   child("Cond:", E.getCond());
   child("Then:", E.getThen());
   child("Else:", E.getElse());
 }
 
-void ASTDumper::visit(ForExprAST &E) {
+void ASTDumper::visitFor(ForExprAST &E) {
   line("For ") << E.getVarName() << " @" << E.getLine() << ':' << E.getCol()
                   << '\n';
   child("Start:", E.getStart());
@@ -100,7 +100,7 @@ void ASTDumper::visit(ForExprAST &E) {
   child("Body:", E.getBody());
 }
 
-void ASTDumper::visit(VarExprAST &E) {
+void ASTDumper::visitVar(VarExprAST &E) {
   line("Var") << " @" << E.getLine() << ':' << E.getCol() << '\n';
   for (const auto &NamedVar : E.getVarNames()) {
     if (NamedVar.second)

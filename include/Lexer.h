@@ -11,9 +11,9 @@ namespace kaleidoscope {
 /// The lexer returns tokens [0-255] if it is an unknown character, otherwise
 /// one of these for known things.
 ///
-/// This stays a plain enum rather than an enum class: gettok() returns int, and
-/// negative values are tokens while positive values are the literal character.
-/// The parser relies on that union to switch over '(' and tok_identifier alike.
+/// A plain enum, not an enum class: gettok() returns int, negative for these
+/// tokens and positive for a literal character, and the parser switches over
+/// both in one statement.
 enum Token {
   tok_eof = -1,
 
@@ -46,8 +46,7 @@ std::string getTokName(int Tok);
 /// Lexer - Turns a character stream into tokens, tracking line/column so the
 /// parser can stamp AST nodes with source locations for debug info.
 ///
-/// Takes an istream rather than reading stdin directly, so it can be driven
-/// from a std::istringstream in tests.
+/// Takes an istream so tests can drive it from a std::istringstream.
 class Lexer {
   std::istream &In;
   int LastChar = ' ';

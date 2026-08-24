@@ -12,9 +12,8 @@ namespace kaleidoscope {
 
 /// DebugInfo - Emits DWARF metadata alongside the generated IR.
 ///
-/// In the tutorial this was a global `KSDbgInfo` struct reaching for the global
-/// DBuilder and Builder. Here it holds explicit references, so the ownership of
-/// the DIBuilder (which needs the Module to already exist) is visible.
+/// Holds the DIBuilder and IRBuilder by reference; the DIBuilder is owned by
+/// the driver, since it cannot be created before the Module exists.
 class DebugInfo {
   llvm::DIBuilder &DBuilder;
   llvm::IRBuilder<> &Builder;

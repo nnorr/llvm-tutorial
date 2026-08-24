@@ -28,7 +28,6 @@ void CodeGen::initModule(StringRef ModuleName, const DataLayout &DL,
                          bool Optimize) {
   OptimizeFunctions = Optimize;
 
-  // Open a new context and module.
   Ctx = std::make_unique<LLVMContext>();
   Mod = std::make_unique<Module>(ModuleName, *Ctx);
   Mod->setDataLayout(DL);
@@ -45,8 +44,7 @@ void CodeGen::initModule(StringRef ModuleName, const DataLayout &DL,
   SI = std::make_unique<StandardInstrumentations>(*Ctx, /*DebugLogging*/ false);
   SI->registerCallbacks(*PIC, MAM.get());
 
-  // Promote allocas to registers -- this is what lets ForExprAST/VarExprAST
-  // emit plain stack slots instead of hand-built PHI nodes.
+  // Promotes the stack slots ForExprAST/VarExprAST emit into SSA registers.
   FPM->addPass(PromotePass());
   // Simple "peephole" optimizations and bit-twiddling optzns.
   FPM->addPass(InstCombinePass());
@@ -67,12 +65,6 @@ void CodeGen::addPrototype(std::unique_ptr<PrototypeAST> Proto) {
   FunctionProtos[Proto->getName()] = std::move(Proto);
 }
 
-Value *CodeGen::codegenExpr(ExprAST &E) {
-  Result = nullptr;
-  E.accept(*this);
-  return Result;
-}
-
 Function *CodeGen::getFunction(const std::string &Name) {
   // First, see if the function has already been added to the current module.
   if (auto *F = Mod->getFunction(Name))
@@ -90,151 +82,124 @@ Function *CodeGen::getFunction(const std::string &Name) {
 
 AllocaInst *CodeGen::createEntryBlockAlloca(Function *TheFunction,
                                             StringRef VarName) {
-  // Always the entry block, never the current one -- mem2reg only promotes
+  // Always the entry block, never the current one: mem2reg only promotes
   // allocas it finds there.
   IRBuilder<> TmpB(&TheFunction->getEntryBlock(),
                    TheFunction->getEntryBlock().begin());
   return TmpB.CreateAlloca(Type::getDoubleTy(*Ctx), nullptr, VarName);
 }
 
-void CodeGen::visit(NumberExprAST &E) {
+Value *CodeGen::visitNumber(NumberExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
-  Result = ConstantFP::get(*Ctx, APFloat(E.getVal()));
+  return ConstantFP::get(*Ctx, APFloat(E.getVal()));
 }
 
-void CodeGen::visit(VariableExprAST &E) {
+Value *CodeGen::visitVariable(VariableExprAST &E) {
   // Look this variable up in the function.
   AllocaInst *V = NamedValues[E.getName()];
-  if (!V) {
-    Result = logErrorV("Unknown variable name");
-    return;
-  }
+  if (!V)
+    return logErrorV("Unknown variable name");
 
   if (Dbg)
     Dbg->emitLocation(&E);
-  Result = Builder->CreateLoad(Type::getDoubleTy(*Ctx), V, E.getName().c_str());
+  return Builder->CreateLoad(Type::getDoubleTy(*Ctx), V, E.getName().c_str());
 }
 
-void CodeGen::visit(UnaryExprAST &E) {
-  Value *OperandV = codegenExpr(E.getOperand());
-  if (!OperandV) {
-    Result = nullptr;
-    return;
-  }
+Value *CodeGen::visitUnary(UnaryExprAST &E) {
+  Value *OperandV = visit(E.getOperand());
+  if (!OperandV)
+    return nullptr;
 
   Function *F = getFunction(std::string("unary") + E.getOpcode());
-  if (!F) {
-    Result = logErrorV("Unknown unary operator");
-    return;
-  }
+  if (!F)
+    return logErrorV("Unknown unary operator");
 
   if (Dbg)
     Dbg->emitLocation(&E);
-  Result = Builder->CreateCall(F, OperandV, "unop");
+  return Builder->CreateCall(F, OperandV, "unop");
 }
 
-/// Assignment is its own node, built by the parser only after it has confirmed
-/// the destination is an identifier -- so there is no cast and no error path
-/// here, unlike the tutorial's '=' special case inside BinaryExprAST::codegen.
-void CodeGen::visit(AssignExprAST &E) {
+/// The parser has already confirmed the destination is an identifier, so there
+/// is no cast and no error path here.
+Value *CodeGen::visitAssign(AssignExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  Value *Val = codegenExpr(E.getValue());
-  if (!Val) {
-    Result = nullptr;
-    return;
-  }
+  Value *Val = visit(E.getValue());
+  if (!Val)
+    return nullptr;
 
   AllocaInst *Variable = NamedValues[E.getName()];
-  if (!Variable) {
-    Result = logErrorV("Unknown variable name");
-    return;
-  }
+  if (!Variable)
+    return logErrorV("Unknown variable name");
 
   Builder->CreateStore(Val, Variable);
-  Result = Val;
+  return Val;
 }
 
-void CodeGen::visit(BinaryExprAST &E) {
+Value *CodeGen::visitBinary(BinaryExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  Value *L = codegenExpr(E.getLHS());
-  Value *R = codegenExpr(E.getRHS());
-  if (!L || !R) {
-    Result = nullptr;
-    return;
-  }
+  Value *L = visit(E.getLHS());
+  Value *R = visit(E.getRHS());
+  if (!L || !R)
+    return nullptr;
 
   switch (E.getOp()) {
   case '+':
-    Result = Builder->CreateFAdd(L, R, "addtmp");
-    return;
+    return Builder->CreateFAdd(L, R, "addtmp");
   case '-':
-    Result = Builder->CreateFSub(L, R, "subtmp");
-    return;
+    return Builder->CreateFSub(L, R, "subtmp");
   case '*':
-    Result = Builder->CreateFMul(L, R, "multmp");
-    return;
+    return Builder->CreateFMul(L, R, "multmp");
   case '<':
     L = Builder->CreateFCmpULT(L, R, "cmptmp");
     // Convert bool 0/1 to double 0.0 or 1.0
-    Result = Builder->CreateUIToFP(L, Type::getDoubleTy(*Ctx), "booltmp");
-    return;
+    return Builder->CreateUIToFP(L, Type::getDoubleTy(*Ctx), "booltmp");
   default:
     break;
   }
 
   // If it wasn't a builtin binary operator, it must be a user defined one.
   Function *F = getFunction(std::string("binary") + E.getOp());
-  if (!F) {
-    Result = logErrorV("binary operator not found");
-    return;
-  }
+  if (!F)
+    return logErrorV("binary operator not found");
 
   Value *Ops2[] = {L, R};
-  Result = Builder->CreateCall(F, Ops2, "binop");
+  return Builder->CreateCall(F, Ops2, "binop");
 }
 
-void CodeGen::visit(CallExprAST &E) {
+Value *CodeGen::visitCall(CallExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
   // Look up the name in the global module table.
   Function *CalleeF = getFunction(E.getCallee());
-  if (!CalleeF) {
-    Result = logErrorV("Unknown function referenced");
-    return;
-  }
+  if (!CalleeF)
+    return logErrorV("Unknown function referenced");
 
-  if (CalleeF->arg_size() != E.getArgs().size()) {
-    Result = logErrorV("Incorrect # arguments passed");
-    return;
-  }
+  if (CalleeF->arg_size() != E.getArgs().size())
+    return logErrorV("Incorrect # arguments passed");
 
   std::vector<Value *> ArgsV;
   for (const auto &Arg : E.getArgs()) {
-    ArgsV.push_back(codegenExpr(*Arg));
-    if (!ArgsV.back()) {
-      Result = nullptr;
-      return;
-    }
+    ArgsV.push_back(visit(*Arg));
+    if (!ArgsV.back())
+      return nullptr;
   }
 
-  Result = Builder->CreateCall(CalleeF, ArgsV, "calltmp");
+  return Builder->CreateCall(CalleeF, ArgsV, "calltmp");
 }
 
-void CodeGen::visit(IfExprAST &E) {
+Value *CodeGen::visitIf(IfExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  Value *CondV = codegenExpr(E.getCond());
-  if (!CondV) {
-    Result = nullptr;
-    return;
-  }
+  Value *CondV = visit(E.getCond());
+  if (!CondV)
+    return nullptr;
 
   // Convert condition to a bool by comparing non-equal to 0.0.
   CondV = Builder->CreateFCmpONE(CondV, ConstantFP::get(*Ctx, APFloat(0.0)),
@@ -250,11 +215,9 @@ void CodeGen::visit(IfExprAST &E) {
 
   // Emit then value.
   Builder->SetInsertPoint(ThenBB);
-  Value *ThenV = codegenExpr(E.getThen());
-  if (!ThenV) {
-    Result = nullptr;
-    return;
-  }
+  Value *ThenV = visit(E.getThen());
+  if (!ThenV)
+    return nullptr;
   Builder->CreateBr(MergeBB);
   // Codegen of 'Then' can change the current block, update ThenBB for the PHI.
   ThenBB = Builder->GetInsertBlock();
@@ -262,11 +225,9 @@ void CodeGen::visit(IfExprAST &E) {
   // Emit else block.
   TheFunction->insert(TheFunction->end(), ElseBB);
   Builder->SetInsertPoint(ElseBB);
-  Value *ElseV = codegenExpr(E.getElse());
-  if (!ElseV) {
-    Result = nullptr;
-    return;
-  }
+  Value *ElseV = visit(E.getElse());
+  if (!ElseV)
+    return nullptr;
   Builder->CreateBr(MergeBB);
   ElseBB = Builder->GetInsertBlock();
 
@@ -276,7 +237,7 @@ void CodeGen::visit(IfExprAST &E) {
   PHINode *PN = Builder->CreatePHI(Type::getDoubleTy(*Ctx), 2, "iftmp");
   PN->addIncoming(ThenV, ThenBB);
   PN->addIncoming(ElseV, ElseBB);
-  Result = PN;
+  return PN;
 }
 
 /// Output for-loop as:
@@ -296,7 +257,7 @@ void CodeGen::visit(IfExprAST &E) {
 ///
 /// NOTE: this is a do-while -- the body always runs at least once, and the end
 /// condition is evaluated *before* the induction variable is incremented.
-void CodeGen::visit(ForExprAST &E) {
+Value *CodeGen::visitFor(ForExprAST &E) {
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
 
   // Create an alloca for the variable in the entry block.
@@ -306,11 +267,9 @@ void CodeGen::visit(ForExprAST &E) {
     Dbg->emitLocation(&E);
 
   // Emit the start code first, without 'variable' in scope.
-  Value *StartVal = codegenExpr(E.getStart());
-  if (!StartVal) {
-    Result = nullptr;
-    return;
-  }
+  Value *StartVal = visit(E.getStart());
+  if (!StartVal)
+    return nullptr;
   Builder->CreateStore(StartVal, Alloca);
 
   BasicBlock *LoopBB = BasicBlock::Create(*Ctx, "loop", TheFunction);
@@ -322,28 +281,22 @@ void CodeGen::visit(ForExprAST &E) {
   NamedValues[E.getVarName()] = Alloca;
 
   // Emit the body. Its value is ignored, but an error is not allowed.
-  if (!codegenExpr(E.getBody())) {
-    Result = nullptr;
-    return;
-  }
+  if (!visit(E.getBody()))
+    return nullptr;
 
   // Emit the step value, defaulting to 1.0.
   Value *StepVal = nullptr;
   if (ExprAST *Step = E.getStep()) {
-    StepVal = codegenExpr(*Step);
-    if (!StepVal) {
-      Result = nullptr;
-      return;
-    }
+    StepVal = visit(*Step);
+    if (!StepVal)
+      return nullptr;
   } else {
     StepVal = ConstantFP::get(*Ctx, APFloat(1.0));
   }
 
-  Value *EndCond = codegenExpr(E.getEnd());
-  if (!EndCond) {
-    Result = nullptr;
-    return;
-  }
+  Value *EndCond = visit(E.getEnd());
+  if (!EndCond)
+    return nullptr;
 
   // Reload, increment, and restore the alloca. This handles the case where the
   // body of the loop mutates the variable.
@@ -366,10 +319,10 @@ void CodeGen::visit(ForExprAST &E) {
     NamedValues.erase(E.getVarName());
 
   // for expr always returns 0.0.
-  Result = Constant::getNullValue(Type::getDoubleTy(*Ctx));
+  return Constant::getNullValue(Type::getDoubleTy(*Ctx));
 }
 
-void CodeGen::visit(VarExprAST &E) {
+Value *CodeGen::visitVar(VarExprAST &E) {
   std::vector<AllocaInst *> OldBindings;
 
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
@@ -384,11 +337,9 @@ void CodeGen::visit(VarExprAST &E) {
     // refers to the outer 'a'.
     Value *InitVal;
     if (Init) {
-      InitVal = codegenExpr(*Init);
-      if (!InitVal) {
-        Result = nullptr;
-        return;
-      }
+      InitVal = visit(*Init);
+      if (!InitVal)
+        return nullptr;
     } else {
       InitVal = ConstantFP::get(*Ctx, APFloat(0.0));
     }
@@ -404,18 +355,16 @@ void CodeGen::visit(VarExprAST &E) {
     Dbg->emitLocation(&E);
 
   // Codegen the body, now that all vars are in scope.
-  Value *BodyVal = codegenExpr(E.getBody());
-  if (!BodyVal) {
-    Result = nullptr;
-    return;
-  }
+  Value *BodyVal = visit(E.getBody());
+  if (!BodyVal)
+    return nullptr;
 
   // Pop all our variables from scope.
   unsigned Idx = 0;
   for (const auto &NamedVar : E.getVarNames())
     NamedValues[NamedVar.first] = OldBindings[Idx++];
 
-  Result = BodyVal;
+  return BodyVal;
 }
 
 Function *CodeGen::codegen(PrototypeAST &P) {
@@ -435,8 +384,7 @@ Function *CodeGen::codegen(PrototypeAST &P) {
 }
 
 Function *CodeGen::codegen(FunctionAST &F) {
-  // Take ownership of the prototype so it can be re-declared into a later
-  // module, but keep a reference for use below.
+  // Read the reference before takeProto() empties the node's unique_ptr.
   PrototypeAST &P = F.getProto();
   FunctionProtos[P.getName()] = F.takeProto();
 
@@ -480,7 +428,7 @@ Function *CodeGen::codegen(FunctionAST &F) {
   if (Dbg)
     Dbg->emitLocation(&F.getBody());
 
-  if (Value *RetVal = codegenExpr(F.getBody())) {
+  if (Value *RetVal = visit(F.getBody())) {
     Builder->CreateRet(RetVal);
 
     if (Dbg)
@@ -498,8 +446,7 @@ Function *CodeGen::codegen(FunctionAST &F) {
   // Error reading body, remove function.
   TheFunction->eraseFromParent();
 
-  // NOTE: the tutorial reads Proto->getOperatorName() here, but Proto was
-  // moved out above, so it dereferences a null unique_ptr. Use the reference.
+  // Proto was moved out above; use the reference, not the unique_ptr.
   if (P.isBinaryOp())
     Ops.erase(P.getOperatorName());
 

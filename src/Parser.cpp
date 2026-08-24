@@ -7,8 +7,7 @@ namespace kaleidoscope {
 
 namespace {
 
-/// LogError* - Little helper functions for error handling. File-local: nothing
-/// outside the parser needs them. CodeGen has its own logError returning
+/// LogError* - Error helpers. File-local; CodeGen has its own returning
 /// Value*.
 std::unique_ptr<ExprAST> logError(const char *Str) {
   fprintf(stderr, "Error: %s\n", Str);
@@ -116,9 +115,8 @@ std::unique_ptr<ExprAST> Parser::parseIfExpr() {
 
 /// forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
 std::unique_ptr<ExprAST> Parser::parseForExpr() {
-  // The tutorial let ForExprAST default its location to whatever CurLoc had
-  // reached by the time the node was built -- i.e. the end of the body. Taking
-  // it at the 'for' keyword gives more useful debug line info.
+  // Taken at the keyword, not where the node is built, so debug line info
+  // points at the 'for' rather than at the end of its body.
   SourceLocation ForLoc = Lex.getCurLoc();
 
   getNextToken(); // eat the for.
@@ -289,14 +287,8 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int ExprPrec,
 
     // Merge LHS/RHS.
     if (BinOp == '=') {
-      // "the destination of '=' must be an identifier" is a syntactic rule, so
-      // enforce it here rather than in codegen. Using LLVM-style RTTI
-      // (Kind + classof) rather than C++ dynamic_cast, since LLVM is normally
-      // built -fno-rtti and the AST already carries the discriminator.
-      //
-      // Doing this in the parser means AssignExprAST can store the name
-      // directly, so codegen has no cast and no failure path at all -- an
-      // assignment to a non-variable is unrepresentable, not merely rejected.
+      // A syntactic rule, so it is enforced here and AssignExprAST can store
+      // the name directly. dyn_cast, not dynamic_cast: LLVM builds -fno-rtti.
       auto *LHSVar = llvm::dyn_cast<VariableExprAST>(LHS.get());
       if (!LHSVar)
         return logError("destination of '=' must be a variable");

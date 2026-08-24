@@ -9,11 +9,10 @@
 
 namespace kaleidoscope {
 
-/// ObjectEmitter - The Chapter 8 backend: lower a Module to a native .o.
+/// ObjectEmitter - Lowers a finished Module to a native object file.
 ///
-/// Kept separate from CodeGen because it is one of two possible consumers of a
-/// finished module (the other being the JIT). CodeGen itself stays unaware of
-/// which one it is feeding -- it only needs a DataLayout.
+/// One of the two consumers of a module, the other being the JIT. CodeGen
+/// needs only a DataLayout and stays unaware of which one it feeds.
 class ObjectEmitter {
 public:
   /// Registers all targets/MCs/asm printers. Call once, before creating a
