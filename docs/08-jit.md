@@ -431,7 +431,7 @@ nm -D build/toy | grep -E 'putchard|printd'
 | 여러 JITDylib | 심볼 격리, 버전 분리 |
 
 원본 튜토리얼에 **Building a JIT** 이라는 별도 4챕터 시리즈가 있고
-(`reference/kaleidoscope/BuildingAJIT/`), 위 주제들을 다룹니다.
+(`llvm/examples/Kaleidoscope/BuildingAJIT/`), 위 주제들을 다룹니다.
 
 ---
 

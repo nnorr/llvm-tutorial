@@ -24,7 +24,7 @@
 ## 2. 1판 — 노드가 스스로 코드를 생성한다
 
 ```cpp
-// 원본 튜토리얼 (reference/kaleidoscope/Chapter9/toy.cpp)
+// 원본 튜토리얼 (llvm/examples/Kaleidoscope/Chapter9/toy.cpp)
 class NumberExprAST : public ExprAST {
   double Val;
 public:

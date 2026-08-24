@@ -481,14 +481,27 @@ later to win.
 ./build/toy -c tests/fib.ks --emit-llvm  # ...and print the module's IR
 ```
 
-`build.sh` remains for compiling the single-file reference chapters:
+### Comparing against upstream
+
+Several notes below cite the tutorial's `toy.cpp` for a given chapter. Those
+sources are not vendored here -- publishing a copy of unmodified LLVM code
+alongside this one adds nothing. Fetch them when you need the comparison:
 
 ```bash
-./build.sh ch7.cpp                       # -> ./ch7, using clang++
-TOY_CXX="$CXX" ./build.sh ch7.cpp        # ...or conda gcc
+git clone --depth 1 --branch release/20.x \
+    https://github.com/llvm/llvm-project.git /tmp/llvm
+ls /tmp/llvm/llvm/examples/Kaleidoscope/       # Chapter2 .. Chapter9
 ```
 
-Upstream sources for every chapter are vendored under
-`reference/kaleidoscope/`, taken from `release/20.x` to match the local
-toolchain. They are the oracle: when this implementation misbehaves, diff
-against the chapter that covers the feature.
+`release/20.x` is the branch to use, matching the LLVM this builds against.
+Each chapter is a single self-contained file:
+
+```bash
+clang++ -g -O0 /tmp/llvm/llvm/examples/Kaleidoscope/Chapter7/toy.cpp \
+    $(llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native) \
+    -o /tmp/ch7
+```
+
+`include/KaleidoscopeJIT.h` is the one upstream file kept in this repo, because
+the build needs it. It is unmodified and carries its original LLVM license
+header.

@@ -29,3 +29,10 @@ compile_commands.json
 .cache/
 *.swp
 .DS_Store
+
+# Upstream tutorial sources and the per-chapter working copies. Kept locally
+# for diffing against this implementation, deliberately not published --
+# reference/ is unmodified LLVM code and chN.cpp is barely changed from it.
+reference/
+ch[0-9].cpp
+build.sh

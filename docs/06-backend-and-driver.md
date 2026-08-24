@@ -358,10 +358,20 @@ EOF에서 한 번 더 모으는 이유는 `extern`만 넣고 끝낸 경우입니
 같은 입력을 Ch7과 우리 것에 넣으면, **프롬프트를 빼고 나면 레퍼런스 출력 전체가
 앞부분에 그대로** 나오고 뒤에 IR 덤프만 붙습니다.
 
+> 아래 `ch7`은 튜토리얼 Chapter7의 `toy.cpp`를 빌드한 것입니다. 이 저장소는
+> upstream 사본을 담지 않으므로 필요할 때 받아서 씁니다.
+>
+> ```bash
+> git clone --depth 1 --branch release/20.x \\
+>     https://github.com/llvm/llvm-project.git /tmp/llvm
+> clang++ -g -O0 /tmp/llvm/llvm/examples/Kaleidoscope/Chapter7/toy.cpp \\
+>     $(llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native) \\
+>     -o /tmp/ch7
+> ```
+
 ```bash
-$ ./build.sh ch7.cpp                       # 레퍼런스 빌드
 $ printf 'def f(x) x+1;\nf(1);\n' > /tmp/in.ks
-$ ./ch7       < /tmp/in.ks > /tmp/ref.txt 2>&1
+$ /tmp/ch7    < /tmp/in.ks > /tmp/ref.txt 2>&1
 $ ./build/toy < /tmp/in.ks > /tmp/our.txt 2>&1
 
 $ sed 's/ready> //g' /tmp/ref.txt > /tmp/ref-n.txt
@@ -374,7 +384,7 @@ $ sed 's/ready> //g' /tmp/our.txt | head -c $(wc -c < /tmp/ref-n.txt) \
 레퍼런스는 `ready> `를 루프 맨 위에서 찍습니다.
 
 ```cpp
-// ch7.cpp — MainLoop
+// 튜토리얼 Chapter7 toy.cpp — MainLoop
 while (true) {
   fprintf(stderr, "ready> ");
   switch (CurTok) {
@@ -666,9 +676,9 @@ echo 'extern putchard(c); putchard(72); putchard(73);' | ./build/toy
 printf 'extern sin(x);\ndef f(x) sin(x)+1;\nf(2);\n' | ./build/toy
 
 # 레퍼런스와 대조 — 프롬프트만 빼면 앞부분이 일치해야 한다
-./build.sh ch7.cpp
+# (/tmp/ch7 빌드 방법은 3.3절 참고)
 printf 'def f(x) x+1;\nf(1);\n' > /tmp/in.ks
-./ch7       < /tmp/in.ks > /tmp/ref.txt 2>&1
+/tmp/ch7    < /tmp/in.ks > /tmp/ref.txt 2>&1
 ./build/toy < /tmp/in.ks > /tmp/our.txt 2>&1
 sed 's/ready> //g' /tmp/ref.txt > /tmp/ref-n.txt
 sed 's/ready> //g' /tmp/our.txt | head -c $(wc -c < /tmp/ref-n.txt) | cmp - /tmp/ref-n.txt

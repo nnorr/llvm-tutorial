@@ -38,7 +38,8 @@ if (OptimizeFunctions && FPM)
 ```
 
 여기가 원본 튜토리얼과 갈리는 지점입니다. **Ch9은 파이프라인 자체를
-삭제합니다** — `ch9.cpp`의 `InitializeModule()`은 컨텍스트·모듈·빌더만 만들고,
+삭제합니다** — Chapter9 `toy.cpp`의 `InitializeModule()`은 컨텍스트·모듈·빌더만
+만들고,
 파일 전체에 `FunctionPassManager`라는 단어가 없습니다. 즉 Ch9에서는 디버그
 정보를 켜든 말든 최적화가 없습니다. 우리는 그 손실을 `-g`일 때로 한정했습니다.
 
