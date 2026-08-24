@@ -10,17 +10,12 @@
 
 namespace kaleidoscope {
 
-/// DebugInfo - Emits DWARF metadata alongside the generated IR.
-///
-/// Holds the DIBuilder and IRBuilder by reference; the DIBuilder is owned by
-/// the driver, since it cannot be created before the Module exists.
 class DebugInfo {
   llvm::DIBuilder &DBuilder;
   llvm::IRBuilder<> &Builder;
   llvm::DICompileUnit *TheCU;
   llvm::DIType *DblTy = nullptr;
 
-  /// Stack of enclosing scopes; the back() is the innermost.
   std::vector<llvm::DIScope *> LexicalBlocks;
 
 public:
@@ -30,22 +25,15 @@ public:
 
   llvm::DICompileUnit *getCompileUnit() const { return TheCU; }
 
-  /// Kaleidoscope has exactly one type, so this is cached.
   llvm::DIType *getDoubleTy();
 
-  /// Sets the IRBuilder's current debug location from a node's source
-  /// location. Passing null clears it -- used to keep the function prologue
-  /// unattributed so debuggers step past it.
   void emitLocation(const ExprAST *AST);
 
-  /// double(double, double, ...) with NumArgs parameters.
   llvm::DISubroutineType *createFunctionType(unsigned NumArgs);
 
-  /// Creates the subprogram DIE for a function definition.
   llvm::DISubprogram *createFunction(llvm::StringRef Name, unsigned LineNo,
                                      unsigned NumArgs);
 
-  /// Attaches a parameter variable DIE to \p Alloca. ArgIdx is 1-based.
   void declareParameter(llvm::DISubprogram *SP, llvm::StringRef Name,
                         unsigned ArgIdx, unsigned LineNo,
                         llvm::AllocaInst *Alloca, llvm::BasicBlock *BB);

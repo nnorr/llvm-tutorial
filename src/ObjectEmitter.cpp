@@ -12,8 +12,7 @@ using namespace llvm;
 namespace kaleidoscope {
 
 void ObjectEmitter::initializeTargets() {
-  // Host triple only, so the native initializers suffice. InitializeAll*()
-  // would drag every backend into the link.
+  // Host triple only, so the native initializers suffice.
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
   InitializeNativeTargetAsmParser();
@@ -47,9 +46,9 @@ bool ObjectEmitter::emit(Module &Mod, TargetMachine &TM,
     return false;
   }
 
-  // The new pass manager does not cover the target codegen pipeline.
   legacy::PassManager Pass;
-  if (TM.addPassesToEmitFile(Pass, Dest, nullptr, CodeGenFileType::ObjectFile)) {
+  if (TM.addPassesToEmitFile(Pass, Dest, nullptr,
+                             CodeGenFileType::ObjectFile)) {
     Error = "TargetMachine can't emit a file of this type";
     return false;
   }

@@ -202,7 +202,6 @@ std::unique_ptr<ExprAST> Parser::parseVarExpr() {
       return logError("expected identifier list after var");
   }
 
-  // At this point, we have to have 'in'.
   if (CurTok != tok_in)
     return logError("expected 'in' keyword after 'var'");
   getNextToken(); // eat 'in'.
@@ -244,7 +243,6 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
   if (!isascii(CurTok) || CurTok == '(' || CurTok == ',')
     return parsePrimary();
 
-  // If this is a unary operator, read it.
   SourceLocation OpLoc = Lex.getCurLoc();
   int Opc = CurTok;
   getNextToken();
@@ -257,27 +255,20 @@ std::unique_ptr<ExprAST> Parser::parseUnary() {
 /// binoprhs ::= ('+' unary)*
 std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int ExprPrec,
                                                std::unique_ptr<ExprAST> LHS) {
-  // If this is a binop, find its precedence.
   while (true) {
     int TokPrec = getTokPrecedence();
 
-    // If this is a binop that binds at least as tightly as the current binop,
-    // consume it, otherwise we are done.
     if (TokPrec < ExprPrec)
       return LHS;
 
-    // Okay, we know this is a binop.
     int BinOp = CurTok;
     SourceLocation BinLoc = Lex.getCurLoc();
     getNextToken(); // eat binop
 
-    // Parse the unary expression after the binary operator.
     auto RHS = parseUnary();
     if (!RHS)
       return nullptr;
 
-    // If BinOp binds less tightly with RHS than the operator after RHS, let
-    // the pending operator take RHS as its LHS.
     int NextPrec = getTokPrecedence();
     if (TokPrec < NextPrec) {
       RHS = parseBinOpRHS(TokPrec + 1, std::move(RHS));
@@ -287,8 +278,6 @@ std::unique_ptr<ExprAST> Parser::parseBinOpRHS(int ExprPrec,
 
     // Merge LHS/RHS.
     if (BinOp == '=') {
-      // A syntactic rule, so it is enforced here and AssignExprAST can store
-      // the name directly. dyn_cast, not dynamic_cast: LLVM builds -fno-rtti.
       auto *LHSVar = llvm::dyn_cast<VariableExprAST>(LHS.get());
       if (!LHSVar)
         return logError("destination of '=' must be a variable");
@@ -369,7 +358,6 @@ std::unique_ptr<PrototypeAST> Parser::parsePrototype() {
   if (CurTok != ')')
     return logErrorP("Expected ')' in prototype");
 
-  // success.
   getNextToken(); // eat ')'.
 
   // Verify right number of names for operator.
@@ -393,12 +381,13 @@ std::unique_ptr<FunctionAST> Parser::parseDefinition() {
 }
 
 /// toplevelexpr ::= expression
-std::unique_ptr<FunctionAST> Parser::parseTopLevelExpr(const std::string &Name) {
+std::unique_ptr<FunctionAST>
+Parser::parseTopLevelExpr(const std::string &Name) {
   SourceLocation FnLoc = Lex.getCurLoc();
   if (auto E = parseExpression()) {
     // Wrap the expression in a zero-argument function.
-    auto Proto = std::make_unique<PrototypeAST>(FnLoc, Name,
-                                                std::vector<std::string>());
+    auto Proto =
+        std::make_unique<PrototypeAST>(FnLoc, Name, std::vector<std::string>());
     return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
   }
   return nullptr;

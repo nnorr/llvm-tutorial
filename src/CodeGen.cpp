@@ -275,15 +275,12 @@ Value *CodeGen::visitFor(ForExprAST &E) {
   Builder->CreateBr(LoopBB);
   Builder->SetInsertPoint(LoopBB);
 
-  // Within the loop the variable shadows any existing one; save it to restore.
   AllocaInst *OldVal = NamedValues[E.getVarName()];
   NamedValues[E.getVarName()] = Alloca;
 
-  // Emit the body. Its value is ignored, but an error is not allowed.
   if (!visit(E.getBody()))
     return nullptr;
 
-  // Emit the step value, defaulting to 1.0.
   Value *StepVal = nullptr;
   if (ExprAST *Step = E.getStep()) {
     StepVal = visit(*Step);
@@ -297,8 +294,6 @@ Value *CodeGen::visitFor(ForExprAST &E) {
   if (!EndCond)
     return nullptr;
 
-  // Reload, increment, and restore the alloca. This handles the case where the
-  // body of the loop mutates the variable.
   Value *CurVar = Builder->CreateLoad(Type::getDoubleTy(*Ctx), Alloca,
                                       E.getVarName().c_str());
   Value *NextVar = Builder->CreateFAdd(CurVar, StepVal, "nextvar");
@@ -311,13 +306,11 @@ Value *CodeGen::visitFor(ForExprAST &E) {
   Builder->CreateCondBr(EndCond, LoopBB, AfterBB);
   Builder->SetInsertPoint(AfterBB);
 
-  // Restore the unshadowed variable.
   if (OldVal)
     NamedValues[E.getVarName()] = OldVal;
   else
     NamedValues.erase(E.getVarName());
 
-  // for expr always returns 0.0.
   return Constant::getNullValue(Type::getDoubleTy(*Ctx));
 }
 
@@ -326,14 +319,10 @@ Value *CodeGen::visitVar(VarExprAST &E) {
 
   Function *TheFunction = Builder->GetInsertBlock()->getParent();
 
-  // Register all variables and emit their initializer.
   for (const auto &NamedVar : E.getVarNames()) {
     const std::string &VarName = NamedVar.first;
     ExprAST *Init = NamedVar.second.get();
 
-    // Emit the initializer before adding the variable to scope, so that
-    //   var a = 1 in var a = a in ...
-    // refers to the outer 'a'.
     Value *InitVal;
     if (Init) {
       InitVal = visit(*Init);
@@ -353,12 +342,10 @@ Value *CodeGen::visitVar(VarExprAST &E) {
   if (Dbg)
     Dbg->emitLocation(&E);
 
-  // Codegen the body, now that all vars are in scope.
   Value *BodyVal = visit(E.getBody());
   if (!BodyVal)
     return nullptr;
 
-  // Pop all our variables from scope.
   unsigned Idx = 0;
   for (const auto &NamedVar : E.getVarNames())
     NamedValues[NamedVar.first] = OldBindings[Idx++];
@@ -367,14 +354,12 @@ Value *CodeGen::visitVar(VarExprAST &E) {
 }
 
 Function *CodeGen::codegen(PrototypeAST &P) {
-  // Make the function type: double(double, double) etc.
   std::vector<Type *> Doubles(P.getArgs().size(), Type::getDoubleTy(*Ctx));
   FunctionType *FT = FunctionType::get(Type::getDoubleTy(*Ctx), Doubles, false);
 
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, P.getName(), Mod.get());
 
-  // Set names for all arguments.
   unsigned Idx = 0;
   for (auto &Arg : F->args())
     Arg.setName(P.getArgs()[Idx++]);
@@ -383,7 +368,6 @@ Function *CodeGen::codegen(PrototypeAST &P) {
 }
 
 Function *CodeGen::codegen(FunctionAST &F) {
-  // Read the reference before takeProto() empties the node's unique_ptr.
   PrototypeAST &P = F.getProto();
   FunctionProtos[P.getName()] = F.takeProto();
 
@@ -391,7 +375,6 @@ Function *CodeGen::codegen(FunctionAST &F) {
   if (!TheFunction)
     return nullptr;
 
-  // If this is an operator, install it so the parser can use it from here on.
   if (P.isBinaryOp())
     Ops.setPrecedence(P.getOperatorName(), P.getBinaryPrecedence());
 
@@ -405,12 +388,9 @@ Function *CodeGen::codegen(FunctionAST &F) {
     TheFunction->setSubprogram(SP);
     Dbg->pushScope(SP);
 
-    // Unset the location for the prologue: leading instructions with no
-    // location are treated as prologue, and the debugger steps past them.
     Dbg->emitLocation(nullptr);
   }
 
-  // Record the function arguments in the NamedValues map.
   NamedValues.clear();
   unsigned ArgIdx = 0;
   for (auto &Arg : TheFunction->args()) {
@@ -433,7 +413,6 @@ Function *CodeGen::codegen(FunctionAST &F) {
     if (Dbg)
       Dbg->popScope();
 
-    // Validate the generated code, checking for consistency.
     verifyFunction(*TheFunction);
 
     if (OptimizeFunctions && FPM)
@@ -442,10 +421,8 @@ Function *CodeGen::codegen(FunctionAST &F) {
     return TheFunction;
   }
 
-  // Error reading body, remove function.
   TheFunction->eraseFromParent();
 
-  // Proto was moved out above; use the reference, not the unique_ptr.
   if (P.isBinaryOp())
     Ops.erase(P.getOperatorName());
 

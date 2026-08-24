@@ -14,8 +14,6 @@ namespace kaleidoscope {
 /// clang/AST/StmtVisitor.h. Dispatch is not virtual, so RetTy is free to vary
 /// per visitor: CodeGen returns llvm::Value*, ASTDumper returns void.
 ///
-/// Closed-world: a new node kind means editing the switch and every visitor.
-/// docs/09-visitor-evolution.md covers the two designs this replaced.
 ///
 /// Derived declares its hooks private and befriends this class.
 template <typename Derived, typename RetTy = void> class ASTVisitor {

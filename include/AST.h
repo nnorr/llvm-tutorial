@@ -11,15 +11,11 @@
 #include <utility>
 #include <vector>
 
-/// Nodes are passive data: no codegen(), no accept(), no LLVM IR types.
-/// llvm/Support/Casting.h is header-only and provides isa<>/dyn_cast<> over the
-/// Kind discriminator below, LLVM's usual stand-in for RTTI.
 namespace kaleidoscope {
 
 /// ExprAST - Base class for all expression nodes.
 class ExprAST {
 public:
-  /// Discriminator for LLVM-style RTTI. Each subclass has a tag and a classof().
   enum ExprASTKind {
     Expr_Number,
     Expr_Variable,
@@ -89,7 +85,6 @@ public:
 
 /// BinaryExprAST - Expression class for a binary operator.
 ///
-/// Assignment is NOT represented here -- see AssignExprAST.
 class BinaryExprAST : public ExprAST {
   char Op;
   std::unique_ptr<ExprAST> LHS, RHS;
@@ -172,7 +167,6 @@ public:
   const std::string &getVarName() const { return VarName; }
   ExprAST &getStart() const { return *Start; }
   ExprAST &getEnd() const { return *End; }
-  /// The step is optional; null means 1.0.
   ExprAST *getStep() const { return Step.get(); }
   ExprAST &getBody() const { return *Body; }
 
