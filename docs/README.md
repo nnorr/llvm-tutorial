@@ -27,6 +27,7 @@ C++에 익숙하지 않은 독자를 기준으로 썼습니다. 새로 나오는
 | [08. JIT 구조](08-jit.md) | `KaleidoscopeJIT.h`, `main.cpp` | Ch4, 별도 시리즈 *Building a JIT* |
 | [09. Visitor 설계 변천](09-visitor-evolution.md) | `ASTVisitor.h`, `AST.h` | — (이 저장소 고유) |
 | [10. 디버그 정보와 최적화](10-debuginfo-and-optimization.md) | `main.cpp`, `CodeGen.cpp` | — (이 저장소 고유) |
+| [11. 테스트](11-testing.md) | `test/`, `tests/`, `CMakeLists.txt` | — (이 저장소 고유) |
 
 한 페이지로 압축한 정리는 [SUMMARY.md](SUMMARY.md)에 있습니다 — 컴포넌트, 구현,
 설계 결정, CRTP까지 한 번에 훑는 용도입니다.
@@ -34,19 +35,21 @@ C++에 익숙하지 않은 독자를 기준으로 썼습니다. 새로 나오는
 01–06은 "코드가 무엇을 하는가", 07–08은 **LLVM 인프라를 어떻게 쓰는가**를
 다룹니다. 멘토가 지목한 *Function Pass* 와 *JIT 컴파일러 구조* 가 이 둘입니다.
 
-09와 10은 부록입니다. 09는 AST 순회 방식을 두 번 갈아엎은 기록 — 버린 설계가
+09–11은 부록입니다. 09는 AST 순회 방식을 두 번 갈아엎은 기록 — 버린 설계가
 왜 그렇게 생겼고 무엇 때문에 버렸는지의 비교입니다. Expression Problem과
 MLIR의 dialect 확장성이 왜 다른 축의 문제인지도 여기서 다룹니다.
 10은 05와 07이 "`-g`면 최적화를 끈다" 한 줄로 넘어간 부분을 펼쳐서,
 그 제약이 어디서 오는지와 clang/gcc가 `-O2 -g`를 어떻게 지원하는지를 봅니다.
+11은 LLVM의 테스트 도구(`lit`, `FileCheck`, `not`)로 생성된 IR을 어떻게
+고정하는지를 다룹니다.
 
 ## 테스트
 
 `ctest --test-dir build`가 네 개를 돌립니다. 앞의 셋(`lexer`, `jit_fib`,
 `jit_operators`)은 컴파일러가 도는지 보고, `lit`은 **생성된 IR**을 검사합니다
 — `test/` 아래 `.ks` 파일마다 `RUN:` 줄과 `CHECK:` 기대값이 들어 있는
-`llvm/test` 방식입니다. 자세한 내용은
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md)의 Testing 절에 있습니다.
+`llvm/test` 방식입니다. 자세한 내용은 [11. 테스트](11-testing.md)에 있고,
+영문 요약은 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)의 Testing 절에 있습니다.
 
 ## 전체 흐름 한눈에
 
